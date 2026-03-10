@@ -77,4 +77,22 @@ public final class GeoUtils {
         angle = angle % 360.0;
         return angle < 0 ? angle + 360.0 : angle;
     }
+
+    /**
+     * Calculates the forward bearing from point A to point B in degrees [0, 360).
+     */
+    public static double calculateBearing(GeoPoint from, GeoPoint to) {
+        double lat1 = Math.toRadians(from.latitude());
+        double lon1 = Math.toRadians(from.longitude());
+        double lat2 = Math.toRadians(to.latitude());
+        double lon2 = Math.toRadians(to.longitude());
+
+        double dLon = lon2 - lon1;
+        double y = Math.sin(dLon) * Math.cos(lat2);
+        double x = Math.cos(lat1) * Math.sin(lat2)
+                - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+
+        double bearing = Math.toDegrees(Math.atan2(y, x));
+        return (bearing + 360.0) % 360.0;
+    }
 }

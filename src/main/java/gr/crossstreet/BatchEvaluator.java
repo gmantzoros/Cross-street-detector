@@ -1,5 +1,6 @@
 package gr.crossstreet;
 
+import gr.crossstreet.geo.GeoUtils;
 import gr.crossstreet.model.DetectionResult;
 import gr.crossstreet.model.GeoPoint;
 import gr.crossstreet.model.TestCase;
@@ -13,18 +14,51 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Batch evaluator for the cross-street detection algorithm.
+ *
+ * <p>Reads test cases from a CSV file, runs the detector on each one, and classifies results
+ * as PASS, FAIL, or ERROR. Implements the iterative forward simulation mechanism described
+ * in the paper (Section 5.2): when the detected road matches the current road (i.e., the
+ * cross-street is still too far), the user position is projected 25m forward along the bearing
+ * and the detection is retried up to 3 times (75m total).</p>
+ *
+ * <p>This eliminates the intermediate ACCEPTABLE category — all results are resolved
+ * into either PASS or FAIL.</p>
+ */
 public class BatchEvaluator {
 
     private static final Logger log = LoggerFactory.getLogger(BatchEvaluator.class);
 
-    public enum Outcome { PASS, ACCEPTABLE, FAIL, ERROR }
+    /** Distance in meters to move forward on each retry iteration. */
+    private static final double FORWARD_STEP_METERS = 25.0;
 
-    public record EvalResult(TestCase testCase, Outcome outcome, String detectedRoad, String errorMessage) {
+    /** Maximum number of forward retries before marking an acceptable result as FAIL. */
+    private static final int MAX_RETRIES = 3;
+
+    public enum Outcome { PASS, FAIL, ERROR }
+
+    /**
+     * Encapsulates the evaluation result for a single test case.
+     *
+     * @param testCase       the original test case
+     * @param outcome        PASS, FAIL, or ERROR
+     * @param detectedRoad   the road name returned by the detector
+     * @param iterationsUsed number of forward iterations needed (0 = immediate success)
+     * @param errorMessage   error details if outcome is ERROR, null otherwise
+     */
+    public record EvalResult(
+            TestCase testCase,
+            Outcome outcome,
+            String detectedRoad,
+            int iterationsUsed,
+            String errorMessage
+    ) {
     }
 
     public static void main(String[] args) {
         String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test-data.csv";
-        String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results.csv";
+        String outputPath = args.length >= 2 ? args[1] : "evaluation-results.csv";
 
         BatchEvaluator evaluator = new BatchEvaluator();
         List<TestCase> testCases = evaluator.loadCsv(Path.of(inputPath));
@@ -35,7 +69,11 @@ public class BatchEvaluator {
 
     /**
      * Reads the CSV file and parses each row into a TestCase.
-     * Expects columns: Previous Coordinates, Current Coordinates, Current Road, Target Road, Result, City
+     * Supports both comma and semicolon delimiters (Greek/EU locale exports with semicolons).
+     * Expects columns: Previous Coordinates, Current Coordinates, Current Road, Target Road, Result, City.
+     *
+     * @param csvPath path to the input CSV file
+     * @return list of parsed test cases
      */
     public List<TestCase> loadCsv(Path csvPath) {
         List<TestCase> testCases = new ArrayList<>();
@@ -68,8 +106,16 @@ public class BatchEvaluator {
         return testCases;
     }
 
+    /**
+     * Parses a single CSV line into a TestCase.
+     * Auto-detects semicolon vs comma delimiter.
+     *
+     * @param line      the raw CSV line
+     * @param rowNumber the 1-based row number for logging
+     * @return the parsed TestCase
+     * @throws IllegalArgumentException if the line cannot be parsed
+     */
     private TestCase parseLine(String line, int rowNumber) {
-        // Detect delimiter: semicolon (Greek/EU locale) or comma
         String delimiter;
         if (line.contains(";")) {
             delimiter = ";";
@@ -79,7 +125,6 @@ public class BatchEvaluator {
 
         String[] parts = line.split(delimiter);
 
-        // Expected: PreviousCoords ; CurrentCoords ; CurrentRoad ; TargetRoad ; Result ; City
         if (parts.length >= 4) {
             String prevCoords = parts[0].trim();
             String currCoords = parts[1].trim();
@@ -96,56 +141,31 @@ public class BatchEvaluator {
         throw new IllegalArgumentException("Could not parse line: " + line);
     }
 
-    private String[] parseQuotedCsv(String line) {
-        List<String> fields = new ArrayList<>();
-        boolean inQuotes = false;
-        StringBuilder current = new StringBuilder();
-
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (c == '"') {
-                inQuotes = !inQuotes;
-            } else if (c == ',' && !inQuotes) {
-                fields.add(current.toString().trim());
-                current = new StringBuilder();
-            } else {
-                current.append(c);
-            }
-        }
-        fields.add(current.toString().trim());
-        return fields.toArray(new String[0]);
-    }
-
     /**
-     * Runs the detector on all test cases and classifies each result.
+     * Runs the detector on all test cases with iterative forward simulation.
+     *
+     * <p>For each test case, the detector is called. If the result matches the target road,
+     * it's a PASS. If it matches the current road (user hasn't reached the cross-street yet),
+     * the position is moved 25m forward and the detection is retried up to 3 times.
+     * Any other result is an immediate FAIL.</p>
+     *
+     * @param testCases the list of test cases to evaluate
+     * @return the list of evaluation results
      */
     public List<EvalResult> runAll(List<TestCase> testCases) {
         CrossStreetDetectorApp app = new CrossStreetDetectorApp();
         List<EvalResult> results = new ArrayList<>();
 
         for (TestCase tc : testCases) {
-            log.info("=== Test #{} | Target: {} | Current: {} ===",
+            log.info("========== Test #{} | Target: {} | Current Road: {} ==========",
                     tc.rowNumber(), tc.targetRoad(), tc.currentRoad());
 
             try {
-                DetectionResult detection = app.detect(tc.currentCoords(), tc.previousCoords());
-                String detectedRoad = detection.roadName().orElse("UNKNOWN");
-
-                Outcome outcome = classify(detectedRoad, tc.targetRoad(), tc.currentRoad());
-                results.add(new EvalResult(tc, outcome, detectedRoad, null));
-
-                String icon = switch (outcome) {
-                    case PASS -> "PASS";
-                    case ACCEPTABLE -> "ACCEPTABLE";
-                    case FAIL -> "FAIL";
-                    case ERROR -> "ERROR";
-                };
-                log.info("#{} | {} | Target: {} | Got: {}",
-                        tc.rowNumber(), icon, tc.targetRoad(), detectedRoad);
-
+                EvalResult result = evaluateWithRetries(app, tc);
+                results.add(result);
             } catch (Exception e) {
                 log.error("#{} | ERROR: {}", tc.rowNumber(), e.getMessage());
-                results.add(new EvalResult(tc, Outcome.ERROR, "", e.getMessage()));
+                results.add(new EvalResult(tc, Outcome.ERROR, "", 0, e.getMessage()));
             }
 
             // Small delay to avoid hitting Google API rate limits
@@ -160,26 +180,83 @@ public class BatchEvaluator {
     }
 
     /**
-     * Classifies the detection result:
-     * - PASS: detected road matches the target road (within tolerance)
-     * - ACCEPTABLE: detected road matches the current road
-     * - FAIL: neither
+     * Evaluates a single test case with the iterative forward simulation mechanism.
+     *
+     * <p>As described in the paper (Section 5.2), when the algorithm returns the current road
+     * instead of the cross-street, it means the intersection is still too far ahead. The user's
+     * position is projected 25m forward along their bearing and the detection is retried.
+     * This repeats up to {@value MAX_RETRIES} times (75m total forward).</p>
+     *
+     * <p>Possible outcomes per iteration:</p>
+     * <ul>
+     *   <li>Detected road matches target road → PASS (stop)</li>
+     *   <li>Detected road matches current road → move forward 25m and retry</li>
+     *   <li>Detected road is something else entirely → FAIL (stop)</li>
+     * </ul>
+     *
+     * @param app the detector application instance
+     * @param tc  the test case to evaluate
+     * @return the evaluation result
+     * @throws Exception if the detector encounters an unrecoverable error
      */
-    private Outcome classify(String detected, String target, String currentRoad) {
-        if (fuzzyMatch(detected, target)) {
-            return Outcome.PASS;
-        } else if (fuzzyMatch(detected, currentRoad)) {
-            return Outcome.ACCEPTABLE;
-        } else {
-            return Outcome.FAIL;
+    private EvalResult evaluateWithRetries(CrossStreetDetectorApp app, TestCase tc) throws Exception {
+        // Calculate the bearing for forward projection
+        double bearing = GeoUtils.calculateBearing(tc.previousCoords(), tc.currentCoords());
+
+        GeoPoint currentPos = tc.currentCoords();
+        GeoPoint previousPos = tc.previousCoords();
+
+        for (int iteration = 0; true; iteration++) {
+            String iterLabel = iteration == 0
+                    ? "Initial"
+                    : "Retry #" + iteration + " (+" + (iteration * 25) + "m)";
+
+            DetectionResult detection = app.detect(currentPos, previousPos);
+            String detectedRoad = detection.roadName().orElse("UNKNOWN");
+
+            if (fuzzyMatch(detectedRoad, tc.targetRoad())) {
+                log.info("#{} | {} | PASS | Target: {} | Got: {}",
+                        tc.rowNumber(), iterLabel, tc.targetRoad(), detectedRoad);
+                return new EvalResult(tc, Outcome.PASS, detectedRoad, iteration, null);
+            }
+
+            if (fuzzyMatch(detectedRoad, tc.currentRoad())) {
+                if (iteration < MAX_RETRIES) {
+                    log.info("#{} | {} | CURRENT ROAD detected ('{}') — moving forward 25m and retrying...",
+                            tc.rowNumber(), iterLabel, detectedRoad);
+
+                    // Move forward 25m along the bearing
+                    previousPos = currentPos;
+                    currentPos = GeoUtils.projectPoint(currentPos, FORWARD_STEP_METERS, bearing);
+
+                    continue;
+                } else {
+                    // Exhausted all retries, still getting current road
+                    log.warn("#{} | {} | FAIL (exhausted {} retries, still detecting current road '{}')",
+                            tc.rowNumber(), iterLabel, MAX_RETRIES, detectedRoad);
+                    return new EvalResult(tc, Outcome.FAIL, detectedRoad, iteration, "Exhausted retries");
+                }
+            }
+
+            // Neither target nor current road — immediate failure
+            log.warn("#{} | {} | FAIL | Target: {} | Got: {} (wrong road)",
+                    tc.rowNumber(), iterLabel, tc.targetRoad(), detectedRoad);
+            return new EvalResult(tc, Outcome.FAIL, detectedRoad, iteration, null);
         }
     }
 
     /**
      * Matches road names accounting for:
-     * - Case differences
-     * - Greek transliteration variations (up to ~30% character differences)
-     * - Abbreviations ("P Tsaldari" vs "Panagi Tsaldari")
+     * <ul>
+     *   <li>Case differences</li>
+     *   <li>Greek transliteration variations (up to ~30% character differences)</li>
+     *   <li>Abbreviations ("P Tsaldari" vs "Panagi Tsaldari")</li>
+     *   <li>Last-word matching ("Dim Gounari" vs "Dimitriou Gounari")</li>
+     * </ul>
+     *
+     * @param a first road name
+     * @param b second road name
+     * @return true if the names are considered a match
      */
     private boolean fuzzyMatch(String a, String b) {
         if (a == null || b == null) return false;
@@ -197,13 +274,19 @@ public class BatchEvaluator {
         String lastB = normB.contains(" ") ? normB.substring(normB.lastIndexOf(' ') + 1) : normB;
         if (levenshteinDistance(lastA, lastB) <= 2) return true;
 
-        // Proportional Levenshtein: allow up to 35% of the shorter string's length
-        int maxAllowed = Math.max(2, (int) (Math.min(normA.length(), normB.length()) * 0.35));
+        // Proportional Levenshtein: allow up to 30% of the shorter string's length
+        int maxAllowed = Math.max(2, (int) (Math.min(normA.length(), normB.length()) * 0.3));
         return levenshteinDistance(normA, normB) <= maxAllowed;
     }
 
     /**
      * Computes the Levenshtein edit distance between two strings.
+     * This counts the minimum number of single-character edits (insertions,
+     * deletions, substitutions) needed to transform one string into the other.
+     *
+     * @param s1 first string
+     * @param s2 second string
+     * @return the edit distance
      */
     private int levenshteinDistance(String s1, String s2) {
         int len1 = s1.length();
@@ -227,24 +310,27 @@ public class BatchEvaluator {
     }
 
     /**
-     * Prints a formatted summary report to the console.
+     * Prints a formatted summary report to the console, including per-case results
+     * and aggregate statistics. PASS results from retries show the forward distance used.
+     *
+     * @param results the list of evaluation results
      */
     public void printReport(List<EvalResult> results) {
         int total = results.size();
         long pass = results.stream().filter(r -> r.outcome == Outcome.PASS).count();
-        long acceptable = results.stream().filter(r -> r.outcome == Outcome.ACCEPTABLE).count();
+        long passImmediate = results.stream().filter(r -> r.outcome == Outcome.PASS && r.iterationsUsed == 0).count();
+        long passRetried = results.stream().filter(r -> r.outcome == Outcome.PASS && r.iterationsUsed > 0).count();
         long fail = results.stream().filter(r -> r.outcome == Outcome.FAIL).count();
         long error = results.stream().filter(r -> r.outcome == Outcome.ERROR).count();
 
         System.out.println();
-        System.out.println("=".repeat(70));
+        System.out.println("=".repeat(85));
         System.out.println("  EVALUATION RESULTS");
-        System.out.println("=".repeat(70));
+        System.out.println("=".repeat(85));
 
         for (EvalResult r : results) {
             String icon = switch (r.outcome) {
-                case PASS -> "PASS       ";
-                case ACCEPTABLE -> "ACCEPTABLE ";
+                case PASS -> r.iterationsUsed == 0 ? "PASS       " : "PASS (+" + (r.iterationsUsed * 25) + "m) ";
                 case FAIL -> "FAIL       ";
                 case ERROR -> "ERROR      ";
             };
@@ -253,27 +339,32 @@ public class BatchEvaluator {
         }
 
         System.out.println();
-        System.out.println("=".repeat(70));
+        System.out.println("=".repeat(85));
         System.out.println("  SUMMARY");
-        System.out.println("=".repeat(70));
-        System.out.printf("  PASS:        %d/%d%n", pass, total);
-        System.out.printf("  ACCEPTABLE:  %d/%d%n", acceptable, total);
-        System.out.printf("  FAIL:        %d/%d%n", fail, total);
-        System.out.printf("  ERROR:       %d/%d%n", error, total);
-        System.out.printf("  Accuracy:    %.1f%%%n", (pass * 100.0) / total);
-        System.out.printf("  Pass + Acc:  %.1f%%%n", ((pass + acceptable) * 100.0) / total);
-        System.out.println("=".repeat(70));
+        System.out.println("=".repeat(85));
+        System.out.printf("  PASS (immediate): %d/%d%n", passImmediate, total);
+        System.out.printf("  PASS (retried):   %d/%d%n", passRetried, total);
+        System.out.printf("  PASS (total):     %d/%d%n", pass, total);
+        System.out.printf("  FAIL:             %d/%d%n", fail, total);
+        System.out.printf("  ERROR:            %d/%d%n", error, total);
+        System.out.printf("  Success rate:     %.1f%%%n", (pass * 100.0) / total);
+        System.out.println("=".repeat(85));
     }
 
     /**
-     * Writes results to a CSV file that can be opened in Excel.
+     * Writes evaluation results to a semicolon-delimited CSV file compatible with
+     * Greek-locale Excel. Includes an Iterations column showing how many forward
+     * steps were needed for each test case.
+     *
+     * @param results    the list of evaluation results
+     * @param outputPath path to the output CSV file
      */
     public void writeCsv(List<EvalResult> results, Path outputPath) {
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8))) {
-            writer.println("Row,Previous Coordinates,Current Coordinates,Current Road,Target Road,Detected Road,Result,City");
+            writer.println("Row;Previous Coordinates;Current Coordinates;Current Road;Target Road;Detected Road;Result;Iterations;City");
 
             for (EvalResult r : results) {
-                writer.printf("%d,\"%s\",\"%s\",%s,%s,%s,%s,%s%n",
+                writer.printf("%d;\"%s\";\"%s\";%s;%s;%s;%s;%d;%s%n",
                         r.testCase.rowNumber(),
                         r.testCase.previousCoords().toApiString(),
                         r.testCase.currentCoords().toApiString(),
@@ -281,6 +372,7 @@ public class BatchEvaluator {
                         r.testCase.targetRoad(),
                         r.detectedRoad,
                         r.outcome,
+                        r.iterationsUsed,
                         r.testCase.city());
             }
 
