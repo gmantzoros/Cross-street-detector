@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -64,7 +65,7 @@ public class RoadFinderClient {
      * Calls the Roads API nearestRoads endpoint to get the placeId of the closest road segment.
      */
     private Optional<String> fetchNearestRoadPlaceId(GeoPoint point) throws IOException {
-        HttpUrl url = HttpUrl.parse(NEAREST_ROADS_URL).newBuilder()
+        HttpUrl url = Objects.requireNonNull(HttpUrl.parse(NEAREST_ROADS_URL)).newBuilder()
                 .addQueryParameter("points", point.toApiString())
                 .addQueryParameter("key", apiKey)
                 .build();
@@ -92,7 +93,7 @@ public class RoadFinderClient {
      * Calls the Geocoding API to resolve a placeId into a road (route) name.
      */
     private Optional<String> resolveRoadNameFromPlaceId(String placeId) throws IOException {
-        HttpUrl url = HttpUrl.parse(GEOCODE_URL).newBuilder()
+        HttpUrl url = Objects.requireNonNull(HttpUrl.parse(GEOCODE_URL)).newBuilder()
                 .addQueryParameter("place_id", placeId)
                 .addQueryParameter("key", apiKey)
                 .build();
@@ -136,6 +137,7 @@ public class RoadFinderClient {
                 throw new IOException("API call to %s returned HTTP %d: %s"
                         .formatted(url.encodedPath(), response.code(), response.message()));
             }
+            assert response.body() != null;
             return response.body().string();
         }
     }

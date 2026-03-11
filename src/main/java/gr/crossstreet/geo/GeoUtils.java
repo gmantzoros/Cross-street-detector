@@ -15,30 +15,20 @@ public final class GeoUtils {
     }
 
     /**
-     * Calculates the bearing from the current point to the previous point (i.e., the reverse
-     * direction of movement), then returns left/right search angles offset by the given degrees.
+     * Calculates the bearing from the previous point to the current point
+     * and returns left/right search angles offset by the given degrees.
      *
      * @param current     the current position
      * @param previous    the previous position
-     * @param angleOffset degrees to offset left and right from the reverse bearing
+     * @param angleOffset degrees to offset left and right from the forward bearing
      * @return left and right search angles in degrees [0, 360)
      */
-    public static BearingAngles calculateSearchAngles(GeoPoint current, GeoPoint previous, double angleOffset) {
-        double lat1 = Math.toRadians(current.latitude());
-        double lon1 = Math.toRadians(current.longitude());
-        double lat2 = Math.toRadians(previous.latitude());
-        double lon2 = Math.toRadians(previous.longitude());
-
-        double dLon = lon2 - lon1;
-        double y = Math.sin(dLon) * Math.cos(lat2);
-        double x = Math.cos(lat1) * Math.sin(lat2)
-                - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-
-        double bearing = Math.toDegrees(Math.atan2(y, x));
-
-        // Reverse direction: the bearing from current→previous gives the "behind" direction,
-        // which is already what the original code computed (bearing + 180)
-        bearing = (bearing + 180.0) % 360.0;
+    public static BearingAngles calculateSearchAngles(
+            GeoPoint current,
+            GeoPoint previous,
+            double angleOffset
+    ) {
+        double bearing = calculateBearing(previous, current);
 
         double left = normalizeAngle(bearing - angleOffset);
         double right = normalizeAngle(bearing + angleOffset);
@@ -49,37 +39,49 @@ public final class GeoUtils {
     /**
      * Projects a point from a center location at a given distance and bearing.
      *
+     * Optimized to precompute repeated sin/cos values.
+     *
      * @param center   the starting point
      * @param distance distance in meters
      * @param bearing  bearing in degrees
      * @return the projected GeoPoint
      */
     public static GeoPoint projectPoint(GeoPoint center, double distance, double bearing) {
-        double centerLatRad = Math.toRadians(center.latitude());
-        double centerLonRad = Math.toRadians(center.longitude());
+        double lat1 = Math.toRadians(center.latitude());
+        double lon1 = Math.toRadians(center.longitude());
+
         double angularDistance = distance / EARTH_RADIUS_METERS;
         double bearingRad = Math.toRadians(bearing);
 
-        double latRad = Math.asin(
-                Math.sin(centerLatRad) * Math.cos(angularDistance)
-                        + Math.cos(centerLatRad) * Math.sin(angularDistance) * Math.cos(bearingRad)
+        // Precompute repeated sin/cos values
+        double sinLat1 = Math.sin(lat1);
+        double cosLat1 = Math.cos(lat1);
+        double sinAngular = Math.sin(angularDistance);
+        double cosAngular = Math.cos(angularDistance);
+        double cosBearing = Math.cos(bearingRad);
+        double sinBearing = Math.sin(bearingRad);
+
+        // Latitude of projected point
+        double lat2 = Math.asin(sinLat1 * cosAngular + cosLat1 * sinAngular * cosBearing);
+
+        // Longitude of projected point
+        double lon2 = lon1 + Math.atan2(
+                sinBearing * sinAngular * cosLat1,
+                cosAngular - sinLat1 * Math.sin(lat2)
         );
 
-        double lonRad = centerLonRad + Math.atan2(
-                Math.sin(bearingRad) * Math.sin(angularDistance) * Math.cos(centerLatRad),
-                Math.cos(angularDistance) - Math.sin(centerLatRad) * Math.sin(latRad)
-        );
+        // Normalize longitude to [-180, 180]
+        lon2 = (lon2 + Math.PI) % (2 * Math.PI);
+        if (lon2 < 0) lon2 += 2 * Math.PI;
+        lon2 -= Math.PI;
 
-        return new GeoPoint(Math.toDegrees(latRad), Math.toDegrees(lonRad));
-    }
-
-    private static double normalizeAngle(double angle) {
-        angle = angle % 360.0;
-        return angle < 0 ? angle + 360.0 : angle;
+        return new GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lon2));
     }
 
     /**
      * Calculates the forward bearing from point A to point B in degrees [0, 360).
+     * <p>
+     * Optimized to precompute repeated sin/cos values for performance.
      */
     public static double calculateBearing(GeoPoint from, GeoPoint to) {
         double lat1 = Math.toRadians(from.latitude());
@@ -88,11 +90,22 @@ public final class GeoUtils {
         double lon2 = Math.toRadians(to.longitude());
 
         double dLon = lon2 - lon1;
-        double y = Math.sin(dLon) * Math.cos(lat2);
-        double x = Math.cos(lat1) * Math.sin(lat2)
-                - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+
+        // Precompute repeated trig values
+        double cosLat1 = Math.cos(lat1);
+        double sinLat1 = Math.sin(lat1);
+        double cosLat2 = Math.cos(lat2);
+
+        double y = Math.sin(dLon) * cosLat2;
+        double x = cosLat1 * Math.sin(lat2) - sinLat1 * cosLat2 * Math.cos(dLon);
 
         double bearing = Math.toDegrees(Math.atan2(y, x));
-        return (bearing + 360.0) % 360.0;
+
+        return normalizeAngle(bearing);
+    }
+
+    private static double normalizeAngle(double angle) {
+        angle = angle % 360.0;
+        return angle < 0 ? angle + 360.0 : angle;
     }
 }
