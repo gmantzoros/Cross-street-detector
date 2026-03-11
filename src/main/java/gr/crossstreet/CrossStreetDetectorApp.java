@@ -88,21 +88,33 @@ public class CrossStreetDetectorApp {
 
         if (leftMeters == Double.MAX_VALUE && rightMeters == Double.MAX_VALUE) {
             log.warn("No road detected in either direction");
-            return new DetectionResult(current, current, 0, 0, Optional.empty());
+            return new DetectionResult(current, current, 0, 0, Optional.empty(), Optional.empty(), OptionalDouble.empty(), 0);
         }
 
-        // Step 4: Pick the closer detection and project to geographic coordinates
+        // Step 4: Pick the closer detection as primary, farther as secondary
         boolean useLeft = leftMeters <= rightMeters;
-        double chosenDistance = useLeft ? leftMeters : rightMeters;
-        double chosenAngle = useLeft ? angles.leftAngle() : angles.rightAngle();
+        double primaryDistance = useLeft ? leftMeters : rightMeters;
+        double primaryAngle = useLeft ? angles.leftAngle() : angles.rightAngle();
+        double secondaryDistance = useLeft ? rightMeters : leftMeters;
+        double secondaryAngle = useLeft ? angles.rightAngle() : angles.leftAngle();
 
-        GeoPoint targetPoint = GeoUtils.projectPoint(current, chosenDistance, chosenAngle);
-        log.info("Target point: {} (distance: {}m, angle: {}°, side: {})",
-                targetPoint, chosenDistance, chosenAngle, useLeft ? "left" : "right");
+        GeoPoint targetPoint = GeoUtils.projectPoint(current, primaryDistance, primaryAngle);
+        log.info("Primary target: {} ({}m, {}°, {})",
+                targetPoint, primaryDistance, primaryAngle, useLeft ? "left" : "right");
 
-        // Step 5: Resolve road name
+        // Step 5: Resolve road names for both directions
         Optional<String> roadName = roadFinder.findRoadName(targetPoint);
 
-        return new DetectionResult(current, targetPoint, chosenDistance, chosenAngle, roadName);
+        Optional<String> alternativeRoadName = Optional.empty();
+        if (secondaryDistance != Double.MAX_VALUE) {
+            GeoPoint secondaryPoint = GeoUtils.projectPoint(current, secondaryDistance, secondaryAngle);
+            log.info("Secondary target: {} ({}m, {}°)", secondaryPoint, secondaryDistance, secondaryAngle);
+            alternativeRoadName = roadFinder.findRoadName(secondaryPoint);
+        }
+
+        OptionalDouble altDist = secondaryDistance != Double.MAX_VALUE
+                ? OptionalDouble.of(secondaryDistance) : OptionalDouble.empty();
+        return new DetectionResult(current, targetPoint, primaryDistance, primaryAngle,
+                roadName, alternativeRoadName, altDist, secondaryAngle);
     }
 }

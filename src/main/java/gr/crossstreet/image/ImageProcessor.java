@@ -72,7 +72,7 @@ public final class ImageProcessor {
     }
 
     private boolean isRoadPixel(Color color) {
-        return color.equals(ROAD_GREEN);
+        return color.getGreen() > 200 && color.getRed() < 50 && color.getBlue() < 50;
     }
 
     private boolean isWithinBounds(BufferedImage image, double x, double y) {

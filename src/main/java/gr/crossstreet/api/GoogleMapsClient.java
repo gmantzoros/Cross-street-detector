@@ -51,8 +51,13 @@ public class GoogleMapsClient {
                 .addQueryParameter("scale", String.valueOf(config.getStaticMapScale()))
                 .addQueryParameter("zoom", String.valueOf(config.getStaticMapZoom()))
                 .addQueryParameter("size", sizeParam)
-                .addQueryParameter("style", "feature:poi|visibility:off")
-                .addQueryParameter("style", "feature:road|color:" + config.getRoadColor())
+                .addQueryParameter("format", "png")
+                // Black base for everything — eliminates stray green from parks/water/terrain
+                .addQueryParameter("style", "feature:all|color:0x000000")
+                // Hide all labels (they can bleed green pixels into non-road areas)
+                .addQueryParameter("style", "feature:all|element:labels|visibility:off")
+                // Color road geometry pure green — exact geometry only, no labels
+                .addQueryParameter("style", "feature:road|element:geometry|color:" + config.getRoadColor())
                 .addQueryParameter("key", config.getApiKey())
                 .build();
 
