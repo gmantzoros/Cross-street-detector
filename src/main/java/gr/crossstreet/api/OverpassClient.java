@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.*;
 
@@ -49,7 +50,7 @@ public class OverpassClient {
 
     /**
      * Executes an Overpass QL query and parses the JSON response.
-     * Retries on 429 and 504 with exponential backoff.
+     * Retries on 429, 504, and socket timeouts with exponential backoff.
      */
     public OverpassData query(String query) throws IOException {
         log.debug("Overpass query: {}", query);
@@ -60,29 +61,41 @@ public class OverpassClient {
                 .post(body)
                 .build();
 
-        for (int attempt = 0; true; attempt++) {
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (response.code() == 429 || response.code() == 504) {
-                    if (attempt < MAX_RETRIES) {
-                        long backoff = INITIAL_BACKOFF_MS * (1L << attempt);
-                        log.warn("Overpass {} — retrying in {}ms (attempt {}/{})",
-                                response.code(), backoff, attempt + 1, MAX_RETRIES);
-                        try { Thread.sleep(backoff); } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            throw new IOException("Interrupted during backoff", e);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (response.code() == 429 || response.code() == 504) {
+                        if (attempt < MAX_RETRIES) {
+                            long backoff = INITIAL_BACKOFF_MS * (1L << attempt);
+                            log.warn("Overpass {} — retrying in {}ms (attempt {}/{})",
+                                    response.code(), backoff, attempt + 1, MAX_RETRIES);
+                            sleep(backoff);
+                            continue;
                         }
-                        continue;
                     }
-                }
-                if (!response.isSuccessful()) {
-                    throw new IOException("Overpass API returned HTTP %d: %s"
-                            .formatted(response.code(), response.message()));
-                }
+                    if (!response.isSuccessful()) {
+                        throw new IOException("Overpass API returned HTTP %d: %s"
+                                .formatted(response.code(), response.message()));
+                    }
 
-                assert response.body() != null;
-                String json = response.body().string();
-                return parseResponse(json);
+                    assert response.body() != null;
+                    String json = response.body().string();
+                    return parseResponse(json);
+                }
+            } catch (SocketTimeoutException e) {
+                if (attempt < MAX_RETRIES) {
+                    log.warn("Timeout — retrying (attempt {}/{})", attempt + 1, MAX_RETRIES);
+                    continue;
+                }
+                throw new IOException("Overpass request timed out after %d retries".formatted(MAX_RETRIES), e);
             }
+        }
+    }
+
+    private static void sleep(long ms) throws IOException {
+        try { Thread.sleep(ms); } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted during backoff", e);
         }
     }
 

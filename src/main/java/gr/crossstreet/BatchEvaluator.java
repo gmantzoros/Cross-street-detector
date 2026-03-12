@@ -108,9 +108,9 @@ public class BatchEvaluator {
 
             results.add(engine.evaluate(app, tc));
 
-            // Delay to respect Overpass API rate limits (typically 1 query per test case)
+            // Delay to respect Overpass API rate limits (public server throttles at ~1 req/3s)
             try {
-                Thread.sleep(1500);
+                Thread.sleep(3000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

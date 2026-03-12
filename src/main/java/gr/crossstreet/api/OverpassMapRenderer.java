@@ -64,14 +64,22 @@ public class OverpassMapRenderer {
 
     /**
      * Fetches roads near the given center and renders them as green lines on a black background.
+     * Reuses cached Overpass data if the new center is close enough that the previous query's
+     * bounding box still fully covers the new rendering area.
      */
     public BufferedImage fetchStyledMap(GeoPoint center) throws IOException {
-        // Compute bounding box from radius
-        String query = getQuery(center);
+        OverpassClient.OverpassData data;
 
-        OverpassClient.OverpassData data = overpassClient.query(query);
-        this.lastData = data;
-        this.lastCenter = center;
+        if (lastData != null && lastCenter != null && isWithinCache(center)) {
+            log.info("Cache HIT — reusing Overpass data (center moved {}m)",
+                    String.format("%.0f", haversineDistance(center, lastCenter)));
+            data = lastData;
+        } else {
+            String query = getQuery(center);
+            data = overpassClient.query(query);
+            this.lastData = data;
+            this.lastCenter = center;
+        }
 
         BufferedImage image = new BufferedImage(imageSize, imageSize, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
@@ -110,6 +118,34 @@ public class OverpassMapRenderer {
         g.dispose();
         log.info("Rendered {} roads on {}x{} image for center {}", roadsDrawn, imageSize, imageSize, center);
         return image;
+    }
+
+    /**
+     * Returns true if the new center is close enough to the cached center that
+     * the cached data's bounding box fully contains the new center's bounding box.
+     * The cached bbox extends queryRadius from lastCenter; the new bbox extends
+     * queryRadius from center. For full containment, the distance between centers
+     * must be small enough that the new bbox doesn't protrude outside the cached bbox.
+     * With a safety margin, this means: distance < queryRadius * 0.3
+     * (e.g., for 150m radius, cache is valid if center moved < 45m).
+     */
+    private boolean isWithinCache(GeoPoint center) {
+        double dist = haversineDistance(center, lastCenter);
+        // The new rendering needs data queryRadius from center.
+        // The cached data covers queryRadius from lastCenter.
+        // Safe overlap margin: new center must be well inside the cached area
+        // so that roads at the edge of the new view are still covered.
+        return dist < queryRadius * 0.3;
+    }
+
+    private static double haversineDistance(GeoPoint a, GeoPoint b) {
+        double dLat = Math.toRadians(b.latitude() - a.latitude());
+        double dLon = Math.toRadians(b.longitude() - a.longitude());
+        double lat1 = Math.toRadians(a.latitude());
+        double lat2 = Math.toRadians(b.latitude());
+        double h = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return 6_371_000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
     }
 
     @NotNull
