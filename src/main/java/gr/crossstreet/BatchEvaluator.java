@@ -1,6 +1,6 @@
 package gr.crossstreet;
 
-import gr.crossstreet.api.GoogleMapsClient;
+import gr.crossstreet.api.OverpassMapRenderer;
 import gr.crossstreet.config.AppConfig;
 import gr.crossstreet.image.DebugImageSaver;
 import gr.crossstreet.model.GeoPoint;
@@ -98,7 +98,7 @@ public class BatchEvaluator {
     public List<EvaluationEngine.EvalResult> runAll(List<TestCase> testCases) {
         AppConfig config = AppConfig.getInstance();
         CrossStreetDetectorApp app = new CrossStreetDetectorApp();
-        DebugImageSaver debugSaver = new DebugImageSaver(new GoogleMapsClient(config), config);
+        DebugImageSaver debugSaver = new DebugImageSaver(new OverpassMapRenderer(config), config);
         EvaluationEngine engine = new EvaluationEngine(debugSaver);
         List<EvaluationEngine.EvalResult> results = new ArrayList<>();
 
@@ -108,9 +108,9 @@ public class BatchEvaluator {
 
             results.add(engine.evaluate(app, tc));
 
-            // Small delay to avoid hitting Google API rate limits
+            // Delay to respect Overpass API rate limits (typically 1 query per test case)
             try {
-                Thread.sleep(500);
+                Thread.sleep(1500);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

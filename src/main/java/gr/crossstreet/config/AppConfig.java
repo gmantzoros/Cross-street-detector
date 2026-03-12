@@ -9,7 +9,6 @@ import java.util.Properties;
 
 /**
  * Centralized configuration loaded from application.properties.
- * The Google Maps API key is resolved from the GOOGLE_MAPS_API_KEY environment variable.
  */
 public final class AppConfig {
 
@@ -59,13 +58,20 @@ public final class AppConfig {
         });
     }
 
-    public String getApiKey() {
-        String key = properties.getProperty("google.maps.api.key");
-        if (key == null || key.startsWith("${")) {
-            throw new IllegalStateException(
-                    "Google Maps API key not configured. Set the GOOGLE_MAPS_API_KEY environment variable.");
-        }
-        return key;
+    public String getOverpassApiUrl() {
+        return properties.getProperty("overpass.api.url", "https://overpass-api.de/api/interpreter");
+    }
+
+    public int getOverpassMapQueryRadius() {
+        return getInt("overpass.map.query.radius", 300);
+    }
+
+    public int getOverpassRoadQueryRadius() {
+        return getInt("overpass.road.query.radius", 50);
+    }
+
+    public int getRenderRoadWidth() {
+        return getInt("render.road.width", 6);
     }
 
     public int getStaticMapScale() {
@@ -78,10 +84,6 @@ public final class AppConfig {
 
     public int getStaticMapSize() {
         return getInt("staticmap.size", 500);
-    }
-
-    public String getRoadColor() {
-        return properties.getProperty("staticmap.road.color", "0x00ff00");
     }
 
     public int getSkipPixels() {

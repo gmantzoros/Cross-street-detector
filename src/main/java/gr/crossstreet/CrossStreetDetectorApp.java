@@ -1,7 +1,7 @@
 package gr.crossstreet;
 
-import gr.crossstreet.api.GoogleMapsClient;
-import gr.crossstreet.api.RoadFinderClient;
+import gr.crossstreet.api.OverpassMapRenderer;
+import gr.crossstreet.api.OverpassRoadFinder;
 import gr.crossstreet.config.AppConfig;
 import gr.crossstreet.geo.GeoUtils;
 import gr.crossstreet.image.ImageProcessor;
@@ -31,14 +31,14 @@ public class CrossStreetDetectorApp {
     private static final Logger log = LoggerFactory.getLogger(CrossStreetDetectorApp.class);
 
     private final AppConfig config;
-    private final GoogleMapsClient mapsClient;
-    private final RoadFinderClient roadFinder;
+    private final OverpassMapRenderer mapsClient;
+    private final OverpassRoadFinder roadFinder;
     private final ImageProcessor imageProcessor;
 
     public CrossStreetDetectorApp() {
         this.config = AppConfig.getInstance();
-        this.mapsClient = new GoogleMapsClient(config);
-        this.roadFinder = new RoadFinderClient(config);
+        this.mapsClient = new OverpassMapRenderer(config);
+        this.roadFinder = new OverpassRoadFinder(config, mapsClient);
         this.imageProcessor = new ImageProcessor(config);
     }
 

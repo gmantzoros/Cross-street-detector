@@ -1,6 +1,6 @@
 package gr.crossstreet.image;
 
-import gr.crossstreet.api.GoogleMapsClient;
+import gr.crossstreet.api.OverpassMapRenderer;
 import gr.crossstreet.config.AppConfig;
 import gr.crossstreet.geo.GeoUtils;
 import gr.crossstreet.model.DetectionResult;
@@ -33,10 +33,10 @@ public class DebugImageSaver {
     private static final Logger log = LoggerFactory.getLogger(DebugImageSaver.class);
     private static final String DEBUG_DIR = "debug";
 
-    private final GoogleMapsClient mapsClient;
+    private final OverpassMapRenderer mapsClient;
     private final double metersPerPixel;
 
-    public DebugImageSaver(GoogleMapsClient mapsClient, AppConfig config) {
+    public DebugImageSaver(OverpassMapRenderer mapsClient, AppConfig config) {
         this.mapsClient = mapsClient;
         this.metersPerPixel = config.getImageScale();
     }
@@ -55,7 +55,7 @@ public class DebugImageSaver {
 
             // White arrow pointing toward previous position (shows where we came from)
             double backBearing = GeoUtils.calculateBearing(tc.currentCoords(), tc.previousCoords());
-            drawArrow(g, cx, cy, backBearing, 70, Color.WHITE);
+            drawArrow(g, cx, cy, backBearing);
 
             // Primary hit — yellow
             if (detection.distanceMeters() > 0) {
@@ -70,7 +70,7 @@ public class DebugImageSaver {
             });
 
             // Red cross at center (current position) — drawn last so it's on top
-            drawCross(g, cx, cy, Color.RED, 14);
+            drawCross(g, cx, cy);
 
             // Bottom caption
             String caption = "#%03d | Target: %s | P: %s | A: %s".formatted(
@@ -105,11 +105,11 @@ public class DebugImageSaver {
         };
     }
 
-    private void drawCross(Graphics2D g, int x, int y, Color color, int size) {
-        g.setColor(color);
+    private void drawCross(Graphics2D g, int x, int y) {
+        g.setColor(Color.RED);
         g.setStroke(new BasicStroke(2.5f));
-        g.drawLine(x - size, y, x + size, y);
-        g.drawLine(x, y - size, x, y + size);
+        g.drawLine(x - 14, y, x + 14, y);
+        g.drawLine(x, y - 14, x, y + 14);
     }
 
     private void drawHitPoint(Graphics2D g, int x, int y, Color color, String label) {
@@ -129,11 +129,11 @@ public class DebugImageSaver {
         g.drawString(label, lx, ly);
     }
 
-    private void drawArrow(Graphics2D g, int cx, int cy, double geoAngle, int length, Color color) {
+    private void drawArrow(Graphics2D g, int cx, int cy, double geoAngle) {
         double rad = Math.toRadians((geoAngle + 270.0) % 360.0);
-        int ex = (int) Math.round(cx + length * Math.cos(rad));
-        int ey = (int) Math.round(cy + length * Math.sin(rad));
-        g.setColor(color);
+        int ex = (int) Math.round(cx + 70 * Math.cos(rad));
+        int ey = (int) Math.round(cy + 70 * Math.sin(rad));
+        g.setColor(Color.WHITE);
         g.setStroke(new BasicStroke(2f));
         g.drawLine(cx, cy, ex, ey);
         double a = Math.atan2(ey - cy, ex - cx);
