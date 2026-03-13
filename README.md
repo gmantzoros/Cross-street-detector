@@ -1,120 +1,114 @@
 # Cross-Street Detector
 
-Image-based cross-street detection for blind pedestrian navigation. The system identifies nearby cross-streets by analyzing styled Google Maps static images where roads are highlighted in green, scanning perpendicular to the user's walking direction to find the closest intersecting road.
+Image-based cross-street detection for blind pedestrian navigation using OpenStreetMap data. Given two consecutive GPS positions, the system renders a local road map, scans perpendicular to the user's walking direction, and identifies the nearest intersecting road — all without requiring any API keys or proprietary services.
 
 ## How It Works
 
 Given two consecutive GPS positions (previous and current):
 
-1. **Bearing calculation** — determines the user's walking direction and computes two search angles (left and right) perpendicular to movement
-2. **Map image retrieval** — fetches a styled Google Maps static image centered on the current position, with roads rendered in pure green (`#00FF00`) and POIs hidden
-3. **Image scanning** — scans pixels outward from the image center along both search angles to detect the first green (road) pixel
-4. **Point projection** — converts the closer pixel-distance detection back to geographic coordinates using spherical earth projection
-5. **Road name resolution** — resolves the projected point to a road name via the Google Roads API (nearest road snap) and Geocoding API (place ID → road name)
+1. **Bearing calculation** — determines the user's walking direction and computes two search angles perpendicular to movement (left and right, offset by a configurable number of degrees)
+2. **Map rendering** — queries OpenStreetMap road data via the Overpass API, then renders a 1000x1000 px image locally using Java2D with roads drawn in green (`#00FF00`) on a black background
+3. **Image scanning** — scans pixels radially outward from the image center along both search angles to detect the first green (road) pixel in each direction
+4. **Point projection** — converts the closer pixel-distance detection back to geographic coordinates using the haversine inverse formula
+5. **Road name resolution** — queries the Overpass API for named roads near the projected point and returns the closest road by perpendicular distance
+
+The system also resolves the road in the **alternative direction** (the farther perpendicular detection), providing a fallback when the primary direction detects the user's current road instead of the cross-street.
 
 ## Prerequisites
 
 - **Java 21+**
 - **Maven 3.9+**
-- **Google Maps API key** with the following APIs enabled:
-  - Maps Static API
-  - Roads API
-  - Geocoding API
 
-## Setup
+No API keys are needed. All road data comes from OpenStreetMap via the public Overpass API, and map images are rendered locally with Java2D.
 
-Clone the repository:
+## Build & Run
 
-```bash
-git clone https://github.com/YOUR_USERNAME/cross-street-detector.git
-cd cross-street-detector
-```
-
-Set your API key as an environment variable:
-
-```bash
-# Linux / macOS
-export GOOGLE_MAPS_API_KEY=your_api_key_here
-
-# Windows (cmd)
-set GOOGLE_MAPS_API_KEY=your_api_key_here
-
-# Windows (PowerShell)
-$env:GOOGLE_MAPS_API_KEY="your_api_key_here"
-```
-
-Build the project:
+Build the fat JAR:
 
 ```bash
 mvn clean package
 ```
 
-## Usage
-
-Run with default test coordinates (Nea Makri, Greece):
+Run with default test coordinates:
 
 ```bash
 java -jar target/Cross-street-detector-1.0-SNAPSHOT.jar
 ```
 
-Run with custom coordinates (`"previous_lat, previous_lon" "current_lat, current_lon"`):
+Run with custom coordinates (`"current_lat, current_lon" "previous_lat, previous_lon"`):
 
 ```bash
-java -jar target/Cross-street-detector-1.0-SNAPSHOT.jar "38.016959, 24.419875" "38.016989, 24.419658"
+java -jar target/Cross-street-detector-1.0-SNAPSHOT.jar "38.016989, 24.419658" "38.016959, 24.419875"
 ```
 
-Example output:
+Run batch evaluation:
 
+```bash
+java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.BatchEvaluator [input.csv] [output.csv]
 ```
-DetectionResult {
-  currentPosition = GeoPoint[lat=38.016989, lon=24.419658]
-  targetPoint     = GeoPoint[lat=38.016871, lon=24.419103]
-  distance        = 50.35 m
-  searchAngle     = 254.95°
-  road            = Theochari Kotsika
-}
-```
+
+Default paths: `src/main/resources/test-data.csv` (input) and `results/evaluation-results.csv` (output).
 
 ## Configuration
 
-All tunable parameters are externalized in `src/main/resources/application.properties`:
+All tunable parameters are in `src/main/resources/application.properties`:
 
 | Property | Default | Description |
 |---|---|---|
-| `staticmap.zoom` | `18` | Google Maps zoom level |
-| `staticmap.size` | `500` | Map image dimensions (before scaling) |
-| `staticmap.scale` | `2` | Image scale factor (2 = 1000×1000 px) |
+| `overpass.api.url` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
+| `overpass.map.query.radius` | `150` | Radius (meters) for map data queries |
+| `overpass.road.query.radius` | `50` | Radius (meters) for road name queries |
+| `render.road.width` | `6` | Road line width in rendered image (pixels) |
+| `staticmap.size` | `500` | Base image size (multiplied by scale) |
+| `staticmap.scale` | `2` | Image scale factor (500 x 2 = 1000 px) |
+| `staticmap.zoom` | `18` | Reference zoom level |
 | `image.skip.pixels` | `50` | Pixels to skip from center before scanning |
-| `image.scale` | `0.265` | Meters per pixel at the configured zoom level |
-| `detection.angle.offset` | `25` | Degrees offset from reverse bearing (left/right) |
+| `image.step.size` | `1.0` | Pixel step size during radial scan |
+| `image.scale` | `0.265` | Meters per pixel (calibrated for zoom 18) |
+| `detection.angle.offset` | `25` | Degrees offset from perpendicular for search angles |
+| `http.connect.timeout.seconds` | `10` | HTTP connection timeout |
+| `http.read.timeout.seconds` | `30` | HTTP read timeout |
 
 ## Project Structure
 
 ```
 src/main/java/gr/crossstreet/
-├── CrossStreetDetectorApp.java   # Entry point and detection pipeline orchestrator
+├── CrossStreetDetectorApp.java        # Entry point and detection pipeline
+├── BatchEvaluator.java                # Batch test runner
+├── EvaluationEngine.java              # Test case evaluation with fuzzy matching
 ├── config/
-│   └── AppConfig.java            # Singleton configuration (env vars + properties)
+│   └── AppConfig.java                 # Singleton config loader
 ├── model/
-│   ├── GeoPoint.java             # Lat/lon coordinate record
-│   ├── BearingAngles.java        # Left/right search angle pair
-│   └── DetectionResult.java      # Detection output with road name
+│   ├── GeoPoint.java                  # Lat/lon coordinate record
+│   ├── BearingAngles.java             # Left/right search angle pair
+│   ├── DetectionResult.java           # Detection output with primary + alternative
+│   └── TestCase.java                  # Batch evaluation test case record
 ├── geo/
-│   └── GeoUtils.java             # Bearing calculation and point projection
+│   └── GeoUtils.java                  # Bearing calculation and point projection
 ├── image/
-│   └── ImageProcessor.java       # Green-pixel road detection via ray scanning
-└── api/
-    ├── GoogleMapsClient.java     # Google Maps Static API client (OkHttp)
-    └── RoadFinderClient.java     # Roads API + Geocoding API client (OkHttp + Jackson)
+│   ├── ImageProcessor.java            # Radial green-pixel road scanning
+│   └── DebugImageSaver.java           # Annotated debug image generation
+├── api/
+│   ├── OverpassClient.java            # HTTP client for Overpass API (with retry)
+│   ├── OverpassMapRenderer.java       # Renders OSM roads as Java2D image + caching
+│   └── OverpassRoadFinder.java        # Finds closest named road via Overpass
+└── util/
+    └── GreekTransliterator.java       # Greek-to-Latin transliteration (ELOT 743)
 ```
 
 ## Tech Stack
 
-- **Java 21** — records, text blocks, pattern matching
-- **Maven** — build and dependency management
-- **OkHttp 4** — HTTP client for all Google API calls
-- **Jackson** — JSON parsing for API responses
+- **Java 21** — records, modern language features
+- **Maven** — build and dependency management (fat JAR via maven-shade-plugin)
+- **OkHttp 4.12** — HTTP client for Overpass API calls
+- **Jackson 2.17** — JSON parsing for API responses
 - **SLF4J + Logback** — structured logging
+- **Java2D** — local map rendering (no external image services)
+- **OpenStreetMap / Overpass API** — sole external data source (open access, no API key)
+
+## Test Dataset
+
+The project includes 101 test cases across 4 Greek cities (Athens, Karystos, Thessaloniki, Patra) in `src/main/resources/test-data.csv`. Validation is performed through batch evaluation with fuzzy Greek street name matching.
 
 ## License
 

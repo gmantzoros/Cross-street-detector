@@ -9,7 +9,7 @@
   <packaging>jar</packaging>
 
   <name>Cross-street-detector</name>
-  <description>Image-based cross-street detection using Google Maps static images</description>
+  <description>Image-based cross-street detection using OpenStreetMap data</description>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
