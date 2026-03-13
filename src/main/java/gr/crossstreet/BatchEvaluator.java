@@ -1,7 +1,5 @@
 package gr.crossstreet;
 
-import gr.crossstreet.api.OverpassMapRenderer;
-import gr.crossstreet.config.AppConfig;
 import gr.crossstreet.image.DebugImageSaver;
 import gr.crossstreet.model.GeoPoint;
 import gr.crossstreet.model.TestCase;
@@ -96,9 +94,8 @@ public class BatchEvaluator {
      * Debug images are saved to {@code debug/} for any FAIL cases.
      */
     public List<EvaluationEngine.EvalResult> runAll(List<TestCase> testCases) {
-        AppConfig config = AppConfig.getInstance();
         CrossStreetDetectorApp app = new CrossStreetDetectorApp();
-        DebugImageSaver debugSaver = new DebugImageSaver(new OverpassMapRenderer(config), config);
+        DebugImageSaver debugSaver = new DebugImageSaver();
         EvaluationEngine engine = new EvaluationEngine(debugSaver);
         List<EvaluationEngine.EvalResult> results = new ArrayList<>();
 
@@ -124,11 +121,9 @@ public class BatchEvaluator {
      */
     public void printReport(List<EvaluationEngine.EvalResult> results) {
         int total = results.size();
-        long pass          = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.PASS).count();
-        long passDirect    = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.PASS && !r.alternativeUsed()).count();
-        long passAlt       = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.PASS && r.alternativeUsed()).count();
-        long fail          = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.FAIL).count();
-        long error         = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.ERROR).count();
+        long pass  = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.PASS).count();
+        long fail  = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.FAIL).count();
+        long error = results.stream().filter(r -> r.outcome() == EvaluationEngine.Outcome.ERROR).count();
 
         System.out.println();
         System.out.println("=".repeat(90));
@@ -137,9 +132,9 @@ public class BatchEvaluator {
 
         for (EvaluationEngine.EvalResult r : results) {
             String icon = switch (r.outcome()) {
-                case PASS -> r.alternativeUsed() ? "PASS (alt)     " : "PASS           ";
-                case FAIL  -> "FAIL           ";
-                case ERROR -> "ERROR          ";
+                case PASS  -> "PASS  ";
+                case FAIL  -> "FAIL  ";
+                case ERROR -> "ERROR ";
             };
             System.out.printf("  #%03d | %s | Target: %-25s | Got: %s%n",
                     r.testCase().rowNumber(), icon, r.testCase().targetRoad(), r.detectedRoad());
@@ -149,12 +144,10 @@ public class BatchEvaluator {
         System.out.println("=".repeat(90));
         System.out.println("  SUMMARY");
         System.out.println("=".repeat(90));
-        System.out.printf("  PASS (direct):       %d/%d%n", passDirect, total);
-        System.out.printf("  PASS (alternative):  %d/%d%n", passAlt, total);
-        System.out.printf("  PASS (total):        %d/%d%n", pass, total);
-        System.out.printf("  FAIL:                %d/%d%n", fail, total);
-        System.out.printf("  ERROR:               %d/%d%n", error, total);
-        System.out.printf("  Success rate:        %.1f%%%n", (pass * 100.0) / total);
+        System.out.printf("  PASS:          %d/%d%n", pass, total);
+        System.out.printf("  FAIL:          %d/%d%n", fail, total);
+        System.out.printf("  ERROR:         %d/%d%n", error, total);
+        System.out.printf("  Success rate:  %.1f%%%n", (pass * 100.0) / total);
         System.out.println("=".repeat(90));
     }
 
@@ -169,10 +162,10 @@ public class BatchEvaluator {
         }
 
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8))) {
-            writer.println("Row;Previous Coordinates;Current Coordinates;Current Road;Target Road;Detected Road;Result;Iterations;AltUsed;City");
+            writer.println("Row;Previous Coordinates;Current Coordinates;Current Road;Target Road;Detected Road;Result;Iterations;City");
 
             for (EvaluationEngine.EvalResult r : results) {
-                writer.printf("%d;\"%s\";\"%s\";%s;%s;%s;%s;%d;%s;%s%n",
+                writer.printf("%d;\"%s\";\"%s\";%s;%s;%s;%s;%d;%s%n",
                         r.testCase().rowNumber(),
                         r.testCase().previousCoords().toApiString(),
                         r.testCase().currentCoords().toApiString(),
@@ -181,7 +174,6 @@ public class BatchEvaluator {
                         r.detectedRoad(),
                         r.outcome(),
                         r.iterationsUsed(),
-                        r.alternativeUsed() ? "YES" : "NO",
                         r.testCase().city());
             }
 

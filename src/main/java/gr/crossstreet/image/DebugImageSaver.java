@@ -1,9 +1,10 @@
 package gr.crossstreet.image;
 
-import gr.crossstreet.api.OverpassMapRenderer;
-import gr.crossstreet.config.AppConfig;
+import gr.crossstreet.api.OverpassClient;
 import gr.crossstreet.geo.GeoUtils;
+import gr.crossstreet.geo.IntersectionDetector;
 import gr.crossstreet.model.DetectionResult;
+import gr.crossstreet.model.GeoPoint;
 import gr.crossstreet.model.TestCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,17 +15,20 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Saves annotated debug images for failed detection cases.
  *
- * <p>Re-fetches the styled map for the given position and overlays:
+ * <p>Renders roads from Overpass geometry data and overlays:
  * <ul>
+ *   <li>Top info panel — row number, current road, target road, detected road</li>
+ *   <li>Road name labels — small text along each rendered road</li>
  *   <li>Red cross — current position (image center)</li>
- *   <li>White arrow — heading direction (toward previous GPS point)</li>
- *   <li>Yellow circle — primary detected road hit point + road name</li>
- *   <li>Cyan circle — alternative detected road hit point + road name</li>
- *   <li>Caption bar — row number, target road, detected roads</li>
+ *   <li>White arrow — heading direction</li>
+ *   <li>Yellow circle — chosen (closest) intersection point + road name</li>
+ *   <li>Gray dots — other forward intersection points + road names</li>
+ *   <li>Bottom caption bar — summary</li>
  * </ul>
  * Images are written to {@value #DEBUG_DIR} as {@code case-NNN.png}.</p>
  */
@@ -32,52 +36,94 @@ public class DebugImageSaver {
 
     private static final Logger log = LoggerFactory.getLogger(DebugImageSaver.class);
     private static final String DEBUG_DIR = "debug";
+    private static final int IMAGE_SIZE = 1000;
+    private static final double METERS_PER_PIXEL = 0.265;
+    private static final int ROAD_WIDTH = 6;
+    private static final Color COLOR_CHOSEN = new Color(255, 220, 0);
+    private static final Color COLOR_OTHER = new Color(160, 160, 160);
 
-    private final OverpassMapRenderer mapsClient;
-    private final double metersPerPixel;
-
-    public DebugImageSaver(OverpassMapRenderer mapsClient, AppConfig config) {
-        this.mapsClient = mapsClient;
-        this.metersPerPixel = config.getImageScale();
+    public DebugImageSaver() {
     }
 
-    public void save(TestCase tc, DetectionResult detection) {
+    public void save(TestCase tc, DetectionResult detection, OverpassClient.OverpassData roadData,
+                     List<IntersectionDetector.Intersection> intersections) {
         try {
-            BufferedImage original = mapsClient.fetchStyledMap(detection.currentPosition());
+            GeoPoint center = detection.currentPosition();
+            double centerLat = center.latitude();
+            double centerLon = center.longitude();
+            double cosLat = Math.cos(Math.toRadians(centerLat));
 
-            BufferedImage canvas = new BufferedImage(original.getWidth(), original.getHeight(), BufferedImage.TYPE_INT_RGB);
+            int cx = IMAGE_SIZE / 2;
+            int cy = IMAGE_SIZE / 2;
+
+            BufferedImage canvas = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB);
             Graphics2D g = canvas.createGraphics();
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.drawImage(original, 0, 0, null);
 
-            int cx = original.getWidth() / 2;
-            int cy = original.getHeight() / 2;
+            g.setColor(Color.BLACK);
+            g.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
-            // White arrow pointing toward previous position (shows where we came from)
-            double backBearing = GeoUtils.calculateBearing(tc.currentCoords(), tc.previousCoords());
-            drawArrow(g, cx, cy, backBearing);
+            // Render roads
+            g.setColor(new Color(0, 255, 0));
+            g.setStroke(new BasicStroke(ROAD_WIDTH, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 
-            // Primary hit — yellow
-            if (detection.distanceMeters() > 0) {
-                int[] p = toPixel(cx, cy, detection.distanceMeters(), detection.searchAngle());
-                drawHitPoint(g, p[0], p[1], new Color(255, 220, 0), "P: " + detection.roadName().orElse("?"));
+            for (OverpassClient.OsmWay way : roadData.ways()) {
+                List<OverpassClient.LatLon> geometry = way.geometry();
+                if (geometry.size() < 2) continue;
+
+                int[] xPoints = new int[geometry.size()];
+                int[] yPoints = new int[geometry.size()];
+                for (int i = 0; i < geometry.size(); i++) {
+                    OverpassClient.LatLon coord = geometry.get(i);
+                    xPoints[i] = cx + (int) Math.round((coord.lon() - centerLon) * 111320 * cosLat / METERS_PER_PIXEL);
+                    yPoints[i] = cy - (int) Math.round((coord.lat() - centerLat) * 111320 / METERS_PER_PIXEL);
+                }
+                g.drawPolyline(xPoints, yPoints, geometry.size());
+
+                // Road name label at midpoint of the way
+                String roadName = IntersectionDetector.resolveRoadName(way.tags());
+                if (roadName != null) {
+                    int mid = geometry.size() / 2;
+                    int labelX = xPoints[mid];
+                    int labelY = yPoints[mid];
+                    drawRoadLabel(g, labelX, labelY, roadName);
+                }
             }
 
-            // Alternative hit — cyan
-            detection.alternativeDistanceMeters().ifPresent(altDist -> {
-                int[] p = toPixel(cx, cy, altDist, detection.alternativeAngle());
-                drawHitPoint(g, p[0], p[1], Color.CYAN, "A: " + detection.alternativeRoadName().orElse("?"));
-            });
+            // White arrow pointing in the FORWARD direction
+            double forwardBearing = GeoUtils.calculateBearing(tc.previousCoords(), tc.currentCoords());
+            drawArrow(g, cx, cy, forwardBearing);
 
-            // Red cross at center (current position) — drawn last so it's on top
+            // All intersection points
+            if (intersections != null) {
+                for (int i = intersections.size() - 1; i >= 0; i--) {
+                    IntersectionDetector.Intersection ix = intersections.get(i);
+                    int px = cx + (int) Math.round((ix.point().longitude() - centerLon) * 111320 * cosLat / METERS_PER_PIXEL);
+                    int py = cy - (int) Math.round((ix.point().latitude() - centerLat) * 111320 / METERS_PER_PIXEL);
+
+                    if (i == 0) {
+                        // Chosen (closest) intersection — yellow
+                        drawHitPoint(g, px, py, COLOR_CHOSEN, ix.roadName());
+                    } else {
+                        // Other intersections — gray, smaller
+                        drawSmallDot(g, px, py, COLOR_OTHER, ix.roadName());
+                    }
+                }
+            }
+
+            // Red cross at center (current position)
             drawCross(g, cx, cy);
 
+            // Top info panel
+            String detected = detection.roadName().orElse("?");
+            String topInfo = "#%03d | Current: %s | Target: %s | Detected: %s".formatted(
+                    tc.rowNumber(), tc.currentRoad(), tc.targetRoad(), detected);
+            drawTopPanel(g, IMAGE_SIZE, topInfo);
+
             // Bottom caption
-            String caption = "#%03d | Target: %s | P: %s | A: %s".formatted(
-                    tc.rowNumber(), tc.targetRoad(),
-                    detection.roadName().orElse("?"),
-                    detection.alternativeRoadName().orElse("?"));
-            drawCaption(g, original.getWidth(), original.getHeight(), caption);
+            String caption = "#%03d | Target: %s | Detected: %s".formatted(
+                    tc.rowNumber(), tc.targetRoad(), detected);
+            drawCaption(g, IMAGE_SIZE, IMAGE_SIZE, caption);
 
             g.dispose();
 
@@ -96,13 +142,15 @@ public class DebugImageSaver {
     // Drawing helpers
     // -------------------------------------------------------------------------
 
-    /** Converts metres + geographic angle to image pixel coordinates. */
-    private int[] toPixel(int cx, int cy, double meters, double geoAngle) {
-        double rad = Math.toRadians((geoAngle + 270.0) % 360.0);
-        return new int[]{
-            (int) Math.round(cx + (meters / metersPerPixel) * Math.cos(rad)),
-            (int) Math.round(cy + (meters / metersPerPixel) * Math.sin(rad))
-        };
+    private void drawRoadLabel(Graphics2D g, int x, int y, String name) {
+        g.setFont(new Font("SansSerif", Font.PLAIN, 10));
+        FontMetrics fm = g.getFontMetrics();
+        // Shadow
+        g.setColor(new Color(0, 0, 0, 180));
+        g.drawString(name, x + 1, y + 1);
+        // Text
+        g.setColor(new Color(200, 200, 255));
+        g.drawString(name, x, y);
     }
 
     private void drawCross(Graphics2D g, int x, int y) {
@@ -123,7 +171,21 @@ public class DebugImageSaver {
         FontMetrics fm = g.getFontMetrics();
         int lx = x + r + 4;
         int ly = y + fm.getAscent() / 2;
-        g.setColor(Color.BLACK);          // shadow
+        g.setColor(Color.BLACK);
+        g.drawString(label, lx + 1, ly + 1);
+        g.setColor(color);
+        g.drawString(label, lx, ly);
+    }
+
+    private void drawSmallDot(Graphics2D g, int x, int y, Color color, String label) {
+        g.setColor(color);
+        g.fillOval(x - 4, y - 4, 8, 8);
+
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        FontMetrics fm = g.getFontMetrics();
+        int lx = x + 6;
+        int ly = y + fm.getAscent() / 2;
+        g.setColor(Color.BLACK);
         g.drawString(label, lx + 1, ly + 1);
         g.setColor(color);
         g.drawString(label, lx, ly);
@@ -140,6 +202,20 @@ public class DebugImageSaver {
         int ah = 10;
         g.drawLine(ex, ey, (int)(ex - ah * Math.cos(a - 0.45)), (int)(ey - ah * Math.sin(a - 0.45)));
         g.drawLine(ex, ey, (int)(ex - ah * Math.cos(a + 0.45)), (int)(ey - ah * Math.sin(a + 0.45)));
+    }
+
+    private void drawTopPanel(Graphics2D g, int w, String text) {
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        FontMetrics fm = g.getFontMetrics();
+        int pad = 6;
+        int bw = fm.stringWidth(text) + pad * 2;
+        int bh = fm.getHeight() + pad;
+        int bx = (w - bw) / 2;
+        int by = 8;
+        g.setColor(new Color(0, 0, 0, 200));
+        g.fillRoundRect(bx, by, bw, bh, 8, 8);
+        g.setColor(new Color(255, 200, 100));
+        g.drawString(text, bx + pad, by + fm.getAscent() + pad / 2);
     }
 
     private void drawCaption(Graphics2D g, int w, int h, String text) {

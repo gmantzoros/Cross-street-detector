@@ -70,38 +70,6 @@ public final class AppConfig {
         return getInt("overpass.road.query.radius", 50);
     }
 
-    public int getRenderRoadWidth() {
-        return getInt("render.road.width", 6);
-    }
-
-    public int getStaticMapScale() {
-        return getInt("staticmap.scale", 2);
-    }
-
-    public int getStaticMapZoom() {
-        return getInt("staticmap.zoom", 18);
-    }
-
-    public int getStaticMapSize() {
-        return getInt("staticmap.size", 500);
-    }
-
-    public int getSkipPixels() {
-        return getInt("image.skip.pixels", 50);
-    }
-
-    public double getStepSize() {
-        return getDouble("image.step.size", 1.0);
-    }
-
-    public double getImageScale() {
-        return getDouble("image.scale", 0.265);
-    }
-
-    public double getAngleOffset() {
-        return getDouble("detection.angle.offset", 25.0);
-    }
-
     public int getConnectTimeoutSeconds() {
         return getInt("http.connect.timeout.seconds", 5);
     }
