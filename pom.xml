@@ -36,6 +36,28 @@
       <version>${jackson.version}</version>
     </dependency>
 
+    <!-- Web server -->
+    <dependency>
+      <groupId>io.javalin</groupId>
+      <artifactId>javalin</artifactId>
+      <version>6.4.0</version>
+    </dependency>
+
+    <!-- Jackson support for Optional -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jdk8</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+
+    <!-- Annotations -->
+    <dependency>
+      <groupId>org.jetbrains</groupId>
+      <artifactId>annotations</artifactId>
+      <version>24.1.0</version>
+      <scope>compile</scope>
+    </dependency>
+
     <!-- Logging -->
     <dependency>
       <groupId>org.slf4j</groupId>
@@ -75,8 +97,9 @@
             <configuration>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>gr.crossstreet.CrossStreetDetectorApp</mainClass>
+                  <mainClass>gr.crossstreet.ApiServer</mainClass>
                 </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
             </configuration>
           </execution>

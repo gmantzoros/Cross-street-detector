@@ -17,7 +17,7 @@ import java.util.Optional;
 /**
  * Cross-Street Detector — Geometry-based variant.
  *
- * Given two consecutive GPS positions (previous and current) and the current road name,
+ * Given two consecutive GPS positions (previous and current),
  * this application finds cross-street intersections using road geometry data from Overpass:
  * 1. Computes the forward bearing from previous to current position
  * 2. Fetches road data from Overpass API (with spatial caching)
@@ -32,12 +32,12 @@ public class CrossStreetDetectorApp {
     private final IntersectionDetector detector;
 
     // Spatial cache: reuse road data when the new query center is close to the previous one
-    private volatile OverpassClient.OverpassData lastRoadData;
-    private volatile GeoPoint lastCenter;
-    private volatile int lastQueryRadius;
+    private OverpassClient.OverpassData lastRoadData;
+    private GeoPoint lastCenter;
+    private int lastQueryRadius;
 
     // Last intersection list for debug image rendering
-    private volatile List<IntersectionDetector.Intersection> lastIntersections = List.of();
+    private List<IntersectionDetector.Intersection> lastIntersections = List.of();
 
     public CrossStreetDetectorApp() {
         this.config = AppConfig.getInstance();
@@ -52,6 +52,12 @@ public class CrossStreetDetectorApp {
     }
 
     public static void main(String[] args) {
+        if (args.length == 1) {
+            System.err.println("Usage: CrossStreetDetectorApp <previousLatLon> <currentLatLon>");
+            System.err.println("Example: CrossStreetDetectorApp \"37.988891, 23.741949\" \"37.988988, 23.741867\"");
+            System.exit(1);
+        }
+
         CrossStreetDetectorApp app = new CrossStreetDetectorApp();
 
         GeoPoint previous = args.length >= 2
@@ -62,10 +68,8 @@ public class CrossStreetDetectorApp {
                 ? GeoPoint.parse(args[1])
                 : GeoPoint.parse("37.988988, 23.741867");
 
-        String currentRoadName = args.length >= 3 ? args[2] : null;
-
         try {
-            DetectionResult result = app.detect(current, previous, currentRoadName);
+            DetectionResult result = app.detect(current, previous);
             log.info("Detection complete:\n{}", result);
         } catch (Exception e) {
             log.error("Detection failed: {}", e.getMessage(), e);
@@ -76,13 +80,12 @@ public class CrossStreetDetectorApp {
     /**
      * Runs the geometry-based cross-street detection pipeline.
      *
-     * @param current         the current GPS position
-     * @param previous        the previous GPS position (used to determine heading)
-     * @param currentRoadName the name of the road the user is on (null to auto-detect)
+     * @param current  the current GPS position
+     * @param previous the previous GPS position (used to determine heading)
      * @return the detection result containing the target point and road name
      * @throws IOException if the Overpass API call fails
      */
-    public DetectionResult detect(GeoPoint current, GeoPoint previous, String currentRoadName) throws IOException {
+    public synchronized DetectionResult detect(GeoPoint current, GeoPoint previous) throws IOException {
         // Step 1: Compute forward bearing
         double forwardBearing = GeoUtils.calculateBearing(previous, current);
         log.info("Forward bearing: {}°", String.format("%.1f", forwardBearing));
@@ -92,18 +95,16 @@ public class CrossStreetDetectorApp {
         OverpassClient.OverpassData roadData = fetchRoadDataCached(current, queryRadius);
         this.lastRoadData = roadData;
 
-        // Auto-detect current road if not provided
-        if (currentRoadName == null) {
-            Optional<String> detected = detector.findNearestRoad(current, roadData);
-            if (detected.isEmpty()) {
-                log.warn("Could not auto-detect current road name");
-                return emptyResult(current);
-            }
-            currentRoadName = detected.get();
-            log.info("Auto-detected current road: '{}'", currentRoadName);
+        // Step 3: Auto-detect current road
+        Optional<String> detected = detector.findNearestRoad(current, roadData);
+        if (detected.isEmpty()) {
+            log.warn("Could not auto-detect current road name");
+            return emptyResult(current);
         }
+        String currentRoadName = detected.get();
+        log.info("Auto-detected current road: '{}'", currentRoadName);
 
-        // Step 3: Find forward intersections
+        // Step 4: Find forward intersections
         List<IntersectionDetector.Intersection> intersections =
                 detector.findForwardIntersections(current, forwardBearing, currentRoadName, roadData);
         this.lastIntersections = intersections;
@@ -128,11 +129,11 @@ public class CrossStreetDetectorApp {
         );
     }
 
-    public OverpassClient.OverpassData getLastRoadData() {
+    public synchronized OverpassClient.OverpassData getLastRoadData() {
         return lastRoadData;
     }
 
-    public List<IntersectionDetector.Intersection> getLastIntersections() {
+    public synchronized List<IntersectionDetector.Intersection> getLastIntersections() {
         return lastIntersections;
     }
 

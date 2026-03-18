@@ -63,19 +63,15 @@ public final class AppConfig {
     }
 
     public int getOverpassMapQueryRadius() {
-        return getInt("overpass.map.query.radius", 300);
-    }
-
-    public int getOverpassRoadQueryRadius() {
-        return getInt("overpass.road.query.radius", 50);
+        return getInt("overpass.map.query.radius", 200);
     }
 
     public int getConnectTimeoutSeconds() {
-        return getInt("http.connect.timeout.seconds", 5);
+        return getInt("http.connect.timeout.seconds", 10);
     }
 
     public int getReadTimeoutSeconds() {
-        return getInt("http.read.timeout.seconds", 5);
+        return getInt("http.read.timeout.seconds", 30);
     }
 
     private int getInt(String key, int defaultValue) {
@@ -83,8 +79,4 @@ public final class AppConfig {
         return val != null ? Integer.parseInt(val) : defaultValue;
     }
 
-    private double getDouble(String key, double defaultValue) {
-        String val = properties.getProperty(key);
-        return val != null ? Double.parseDouble(val) : defaultValue;
-    }
 }

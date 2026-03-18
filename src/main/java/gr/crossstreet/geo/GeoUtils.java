@@ -1,6 +1,5 @@
 package gr.crossstreet.geo;
 
-import gr.crossstreet.model.BearingAngles;
 import gr.crossstreet.model.GeoPoint;
 
 /**
@@ -12,28 +11,6 @@ public final class GeoUtils {
 
     private GeoUtils() {
         // Utility class
-    }
-
-    /**
-     * Calculates the bearing from the previous point to the current point
-     * and returns left/right search angles offset by the given degrees.
-     *
-     * @param current     the current position
-     * @param previous    the previous position
-     * @param angleOffset degrees to offset left and right from the forward bearing
-     * @return left and right search angles in degrees [0, 360)
-     */
-    public static BearingAngles calculateSearchAngles(
-            GeoPoint current,
-            GeoPoint previous,
-            double angleOffset
-    ) {
-        double bearing = calculateBearing(previous, current);
-
-        double left = normalizeAngle(bearing - angleOffset);
-        double right = normalizeAngle(bearing + angleOffset);
-
-        return new BearingAngles(left, right);
     }
 
     /**

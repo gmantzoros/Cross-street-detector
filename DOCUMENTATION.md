@@ -14,7 +14,9 @@ Blind pedestrians navigating urban environments face significant challenges at r
 
 ### 1.2 Approach Overview
 
-The system takes as input two consecutive GPS coordinates (representing the user's previous and current positions) and the name of the road the user is currently walking on. From these inputs, it computes the user's walking direction and queries OpenStreetMap for all nearby road geometries. It then performs computational geometry operations — specifically, segment-segment intersection testing — to find where the current road intersects with other named roads ahead of the user. The closest such intersection is reported as the result.
+The system takes as input two consecutive GPS coordinates (representing the user's previous and current positions). From these inputs, it computes the user's walking direction, automatically detects the road the user is on, and queries OpenStreetMap for all nearby road geometries. It then performs computational geometry operations — specifically, segment-segment intersection testing — to find where the current road intersects with other named roads ahead of the user. The closest such intersection is reported as the result.
+
+The system is accessible both as a REST API (the default entry point) and as a CLI tool.
 
 ### 1.3 Design Philosophy: Open Access
 
@@ -30,7 +32,7 @@ This implementation (the `openaccess-noimage` variant) was designed with a delib
 
 ### 2.1 High-Level Pipeline
 
-The detection pipeline is orchestrated by `CrossStreetDetectorApp.detect()` and consists of three sequential phases:
+The detection pipeline is orchestrated by `CrossStreetDetectorApp.detect()` and consists of four sequential phases:
 
 ```
 Phase 1: Bearing Computation
@@ -43,7 +45,12 @@ Phase 2: Road Data Acquisition
    Output: Set of OSM way geometries with tags (road names, types)
    Method: Overpass API query with spatial caching
 
-Phase 3: Geometry-Based Intersection Detection
+Phase 3: Current Road Detection
+   Input:  User position, Road data
+   Output: Current road name (auto-detected)
+   Method: Nearest named road by point-to-segment distance
+
+Phase 4: Geometry-Based Intersection Detection
    Input:  User position, Forward bearing, Current road name, Road data
    Output: List of cross-street intersections sorted by distance
    Method: 2D segment-segment intersection with forward-direction filtering
@@ -53,11 +60,18 @@ Phase 3: Geometry-Based Intersection Detection
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│                         ApiServer (Javalin)                      │
+│                 REST API entry point (port 8080)                 │
+│              GET /detect?prev=lat,lon&curr=lat,lon               │
+│              GET /health                                         │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
 │                    CrossStreetDetectorApp                        │
 │  ┌──────────────┐  ┌────────────────┐  ┌─────────────────────┐ │
 │  │   GeoUtils    │  │ OverpassClient │  │ IntersectionDetector│ │
 │  │  (bearing,    │  │  (HTTP + JSON  │  │  (segment math,     │ │
-│  │   haversine,  │  │   with retry)  │  │   fuzzy matching,   │ │
+│  │   haversine,  │  │   with retry)  │  │   road detection,   │ │
 │  │   projection) │  │                │  │   name resolution)  │ │
 │  └──────────────┘  └───────┬────────┘  └─────────────────────┘ │
 │                             │                                    │
@@ -71,34 +85,35 @@ Phase 3: Geometry-Based Intersection Detection
 │                      Batch Evaluation                           │
 │  ┌────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
 │  │ BatchEvaluator │  │ EvaluationEngine │  │DebugImageSaver │  │
-│  │ (CSV I/O,      │  │ (pass/fail logic,│  │(annotated PNG  │  │
-│  │  rate limiting) │  │  fuzzy matching) │  │ for failures)  │  │
+│  │ (CSV I/O,      │  │ (pass/fail logic)│  │(annotated PNG  │  │
+│  │  rate limiting) │  │                  │  │ for failures)  │  │
 │  └────────────────┘  └──────────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Support Components                         │
 │  ┌────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
-│  │   AppConfig    │  │GreekTransliterator│ │   Data Models  │  │
-│  │ (singleton,    │  │(ELOT 743-like     │ │ (GeoPoint,     │  │
-│  │  env vars)     │  │ Greek→Latin)      │ │  TestCase, etc)│  │
+│  │   AppConfig    │  │GreekTransliterator│ │ RoadNameMatcher│  │
+│  │ (singleton,    │  │(ELOT 743-like     │ │ (fuzzy Greek   │  │
+│  │  env vars)     │  │ Greek→Latin)      │ │  name matching)│  │
 │  └────────────────┘  └──────────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2.3 Data Flow
 
-1. The user provides two GPS coordinate pairs and optionally a road name.
+1. The user provides two GPS coordinate pairs (previous and current position) via REST API or CLI.
 2. `GeoUtils.calculateBearing()` computes the forward azimuth.
 3. `CrossStreetDetectorApp.fetchRoadDataCached()` checks the spatial cache; on miss, constructs an Overpass QL query and delegates to `OverpassClient.query()`.
 4. The Overpass API returns JSON containing OSM way elements with inline geometry coordinates and tags (including road names).
 5. `OverpassClient.parseResponse()` deserializes the JSON into typed Java records (`OsmWay`, `LatLon`, `OverpassData`).
-6. `IntersectionDetector.findForwardIntersections()` processes the road data:
-   - Classifies ways into "current road" and "other named roads" using fuzzy name matching.
+6. `IntersectionDetector.findNearestRoad()` auto-detects the current road by finding the nearest named road to the user's position using point-to-segment distance.
+7. `IntersectionDetector.findForwardIntersections()` processes the road data:
+   - Classifies ways into "current road" and "other named roads" using fuzzy name matching (`RoadNameMatcher`).
    - Projects all coordinates into a local 2D meter-based system.
    - Tests every pair of segments (current road vs. other road) for geometric intersection.
    - Filters results by forward direction and deduplicates by road name.
-7. The closest forward intersection is returned as a `DetectionResult`.
+8. The closest forward intersection is returned as a `DetectionResult` (serialized as JSON in API mode).
 
 ---
 
@@ -353,7 +368,7 @@ The purpose of this normalization is not to produce correct Greek pronunciation,
 
 ### 5.4 Multi-Tier Fuzzy Matching
 
-The fuzzy matching algorithm (`IntersectionDetector.fuzzyMatchRoadName()` and `EvaluationEngine.fuzzyMatch()`) employs five matching tiers, evaluated in order of decreasing strictness:
+The fuzzy matching algorithm (`RoadNameMatcher.fuzzyMatch()`, shared by both `IntersectionDetector` and `EvaluationEngine`) employs five matching tiers, evaluated in order of decreasing strictness:
 
 **Tier 1: Exact match after normalization**
 ```
@@ -415,7 +430,7 @@ dp[i][j] = min(
 )
 ```
 
-**Implementation**: `IntersectionDetector.levenshteinDistance()` (lines 335–347 of `IntersectionDetector.java`) and `EvaluationEngine.levenshteinDistance()` (lines 159–178 of `EvaluationEngine.java`).
+**Implementation**: `RoadNameMatcher.levenshteinDistance()` in `util/RoadNameMatcher.java`. This is the single shared implementation used by both intersection detection and evaluation.
 
 ---
 
@@ -457,7 +472,7 @@ The longitude offset includes a cosine correction to ensure the bounding box is 
 
 ### 6.2 HTTP Client and Retry Logic
 
-The `OverpassClient` uses OkHttp 4 as the HTTP client. Requests are sent as `POST` with the query encoded as form data (`application/x-www-form-urlencoded`).
+The `OverpassClient` uses OkHttp 4 as the HTTP client. Requests are sent as `POST` with the query URL-encoded as form data (`application/x-www-form-urlencoded`).
 
 **Retry strategy** (up to 3 retries):
 
@@ -536,12 +551,12 @@ The 30% threshold means the cache is valid as long as the user has moved no more
 
 ### 7.3 Implementation
 
-The cache state is stored as three volatile fields in `CrossStreetDetectorApp`:
+The cache state is stored as three instance fields in `CrossStreetDetectorApp`:
 - `lastRoadData`: The most recent `OverpassData` response
 - `lastCenter`: The geographic center of the last query
 - `lastQueryRadius`: The radius of the last query
 
-The `volatile` keyword ensures thread-safe visibility of cache state, though the current implementation is single-threaded.
+Thread safety is ensured by the `synchronized` keyword on the `detect()` method and its accessors, which is necessary when serving concurrent API requests via the Javalin HTTP server.
 
 ---
 
@@ -549,7 +564,7 @@ The `volatile` keyword ensures thread-safe visibility of cache state, though the
 
 ### 8.1 Use Case
 
-When the system is invoked without an explicit current road name (standalone mode), it must determine which road the user is on by analyzing their position relative to nearby road geometries.
+The system always auto-detects the current road by analyzing the user's position relative to nearby road geometries. There is no option to provide the road name manually — detection is fully automatic.
 
 ### 8.2 Algorithm
 
@@ -605,7 +620,7 @@ The test dataset (`src/main/resources/test-data.csv`) contains 100 real-world te
 Each test case consists of:
 - **Previous Coordinates**: The GPS position one step earlier (used to compute direction)
 - **Current Coordinates**: The GPS position at the moment of query
-- **Current Road**: The name of the road the user is walking on
+- **Current Road**: The name of the road the user is walking on (present in CSV but skipped — the system auto-detects it)
 - **Target Road**: The expected cross-street name (ground truth)
 - **City**: The city name (for reporting)
 
@@ -615,12 +630,12 @@ The CSV uses semicolon delimiters (Greek/EU locale convention) with UTF-8 encodi
 
 ```
 For each test case:
-    1. Call CrossStreetDetectorApp.detect(current, previous, currentRoad)
+    1. Call CrossStreetDetectorApp.detect(current, previous)
     2. Extract detected road name from result
-    3. Fuzzy-match detected name against target name
+    3. Fuzzy-match detected name against target name (using RoadNameMatcher)
     4. Record outcome: PASS / FAIL / ERROR
     5. If FAIL: save annotated debug image to debug/case-NNN.png
-    6. Wait 3 seconds (Overpass API rate limiting)
+    6. Wait 1 second (Overpass API rate limiting)
 
 Print summary report:
     Per-case results table
@@ -659,10 +674,8 @@ These debug images are invaluable for diagnosing failure modes: they reveal whet
 The results CSV (`evaluation-results.csv`) uses semicolons as delimiters for compatibility with European locale Excel installations:
 
 ```
-Row;Previous Coordinates;Current Coordinates;Current Road;Target Road;Detected Road;Result;Iterations;City
+Row;Previous Coordinates;Current Coordinates;Target Road;Detected Road;Result;City
 ```
-
-The `Iterations` column is present for historical compatibility with an earlier design that supported retries; in the current implementation it is always 0.
 
 ---
 
@@ -678,7 +691,6 @@ The `Iterations` column is present for historical compatibility with an earlier 
 |----------|---------|------|-------------|
 | `overpass.api.url` | `https://overpass-api.de/api/interpreter` | String | Overpass API endpoint URL |
 | `overpass.map.query.radius` | `200` | Integer | Radius in meters for the road geometry query bounding box |
-| `overpass.road.query.radius` | `50` | Integer | Radius in meters for targeted road name queries |
 | `http.connect.timeout.seconds` | `10` | Integer | TCP connection timeout for OkHttp client |
 | `http.read.timeout.seconds` | `30` | Integer | Read timeout for OkHttp client |
 
@@ -713,15 +725,7 @@ Represents a geographic coordinate pair. Provides:
 - `parse(String)`: Parses "lat, lon" strings (with flexible whitespace)
 - `toApiString()`: Formats as "lat,lon" (no space, for API calls)
 
-### 11.2 BearingAngles
-
-```java
-public record BearingAngles(double leftAngle, double rightAngle)
-```
-
-Represents a pair of search angles offset from the forward bearing. This model is retained from the earlier image-based design where the system scanned pixels along two perpendicular directions.
-
-### 11.3 DetectionResult
+### 11.2 DetectionResult
 
 ```java
 public record DetectionResult(
@@ -735,22 +739,34 @@ public record DetectionResult(
 
 The output of the detection pipeline. Contains the intersection coordinates, distance, bearing, and the resolved road name. The `roadName` is `Optional.empty()` when no intersection was found.
 
-### 11.4 TestCase
+### 11.3 TestCase
 
 ```java
 public record TestCase(
     int rowNumber,
     GeoPoint previousCoords,
     GeoPoint currentCoords,
-    String currentRoad,
     String targetRoad,
     String city
 )
 ```
 
-A single test case from the batch evaluation dataset.
+A single test case from the batch evaluation dataset. The current road is auto-detected at runtime rather than provided as input.
 
-### 11.5 Overpass Data Records
+### 11.5 EvalResult
+
+```java
+public record EvalResult(
+    TestCase testCase,
+    Outcome outcome,
+    String detectedRoad,
+    String errorMessage
+)
+```
+
+Defined as an inner record of `EvaluationEngine`. Represents the result of evaluating a single test case. The `outcome` is one of `PASS`, `FAIL`, or `ERROR`.
+
+### 11.6 Overpass Data Records
 
 ```java
 public record LatLon(double lat, double lon)
@@ -760,7 +776,7 @@ public record OverpassData(List<OsmWay> ways)
 
 Typed representations of Overpass API response data. `OsmWay` contains the full inline geometry (coordinate list) and all OSM tags.
 
-### 11.6 Intersection
+### 11.7 Intersection
 
 ```java
 public record Intersection(
@@ -814,11 +830,13 @@ The initial version of the system (not on this branch) used a five-step pipeline
 
 ### 12.5 What Was Added
 
-- `IntersectionDetector`: Full geometry-based intersection detection engine
+- `ApiServer`: REST API server using Javalin, providing HTTP access to the detection pipeline
+- `IntersectionDetector`: Full geometry-based intersection detection engine with auto-detection of current road
+- `RoadNameMatcher`: Shared fuzzy Greek road name matching utility (extracted from duplicated logic in `IntersectionDetector` and `EvaluationEngine`)
 - `GreekTransliterator`: Greek-to-Latin transliteration for road name resolution
 - `DebugImageSaver`: Diagnostic image generator for failed cases
 - Spatial caching in `CrossStreetDetectorApp`
-- Enhanced fuzzy matching with abbreviation support and normalization
+- Thread-safe `synchronized` detection for concurrent API requests
 
 ---
 
@@ -828,14 +846,16 @@ The initial version of the system (not on this branch) used a five-step pipeline
 |-----------|-----------|---------|---------|
 | Language | Java | 21 | Records, text blocks, pattern matching |
 | Build | Maven | 3.13.0+ | Dependency management, fat JAR packaging |
+| Web Server | Javalin | 6.4.0 | Lightweight REST API server |
 | HTTP Client | OkHttp | 4.12.0 | Overpass API communication |
-| JSON Parser | Jackson Databind | 2.17.0 | Overpass response deserialization |
+| JSON Parser | Jackson Databind | 2.17.0 | Overpass response deserialization and REST JSON |
+| JSON Modules | Jackson JDK8 | 2.17.0 | `Optional` serialization support for API responses |
 | Logging Facade | SLF4J | 2.0.12 | Structured logging abstraction |
 | Logging Impl | Logback | 1.5.3 | Console and file logging |
 | External Data | OpenStreetMap | — | Road network data (open access) |
 | External API | Overpass API | 0.7.x | OSM data query engine |
 
-The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which bundles all dependencies into a single executable JAR file.
+The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which bundles all dependencies into a single executable JAR file. The default main class is `ApiServer` (REST API); the CLI entry point (`CrossStreetDetectorApp`) can be invoked via `-cp`.
 
 ---
 
@@ -846,7 +866,7 @@ The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which
 1. **OSM data quality**: The system's accuracy depends entirely on the completeness and correctness of OpenStreetMap road data. Missing roads, unnamed roads, or incorrect geometries will cause detection failures.
 2. **GPS accuracy**: Consumer GPS devices typically have 3–10 meter accuracy. If the user is far from their actual position, the bearing calculation may be inaccurate, and the auto-detection of the current road may fail.
 3. **Rate limiting**: The public Overpass API has rate limits. Batch evaluation with 100 test cases requires approximately 5 minutes (3s delay between queries) plus API processing time.
-4. **No real-time tracking**: The current design handles single-shot queries. A real-time navigation system would need continuous GPS tracking, bearing smoothing, and incremental updates.
+4. **Single-shot queries**: While the REST API enables integration with real-time clients, the detection pipeline itself handles single-shot queries. A real-time navigation system would need continuous GPS tracking, bearing smoothing, and incremental updates on the client side.
 5. **Greek-specific optimizations**: The transliteration and fuzzy matching logic is tailored for Greek street names. Supporting other languages with non-Latin scripts would require additional transliteration modules and normalized matching rules.
 
 ### 14.2 Potential Improvements

@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 
@@ -55,7 +57,7 @@ public class OverpassClient {
     public OverpassData query(String query) throws IOException {
         log.debug("Overpass query: {}", query);
 
-        RequestBody body = RequestBody.create("data=" + query, FORM);
+        RequestBody body = RequestBody.create("data=" + URLEncoder.encode(query, StandardCharsets.UTF_8), FORM);
         Request request = new Request.Builder()
                 .url(overpassUrl)
                 .post(body)
@@ -78,8 +80,11 @@ public class OverpassClient {
                                 .formatted(response.code(), response.message()));
                     }
 
-                    assert response.body() != null;
-                    String json = response.body().string();
+                    ResponseBody responseBody = response.body();
+                    if (responseBody == null) {
+                        throw new IOException("Overpass API returned empty body");
+                    }
+                    String json = responseBody.string();
                     return parseResponse(json);
                 }
             } catch (SocketTimeoutException e) {

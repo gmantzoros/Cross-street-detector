@@ -79,14 +79,14 @@ public class BatchEvaluator {
 
         String prevCoords = parts[0].trim();
         String currCoords = parts[1].trim();
-        String currentRoad = parts[2].trim();
+        // parts[2] is current road — skipped, now auto-detected
         String targetRoad = parts[3].trim();
         String city = parts.length >= 6 ? parts[5].trim() : "";
 
         return new TestCase(rowNumber,
                 GeoPoint.parse(prevCoords),
                 GeoPoint.parse(currCoords),
-                currentRoad, targetRoad, city);
+                targetRoad, city);
     }
 
     /**
@@ -100,8 +100,8 @@ public class BatchEvaluator {
         List<EvaluationEngine.EvalResult> results = new ArrayList<>();
 
         for (TestCase tc : testCases) {
-            log.info("========== Test #{} | Target: {} | Current: {} ==========",
-                    tc.rowNumber(), tc.targetRoad(), tc.currentRoad());
+            log.info("========== Test #{} | Target: {} ==========",
+                    tc.rowNumber(), tc.targetRoad());
 
             results.add(engine.evaluate(app, tc));
 
@@ -147,7 +147,7 @@ public class BatchEvaluator {
         System.out.printf("  PASS:          %d/%d%n", pass, total);
         System.out.printf("  FAIL:          %d/%d%n", fail, total);
         System.out.printf("  ERROR:         %d/%d%n", error, total);
-        System.out.printf("  Success rate:  %.1f%%%n", (pass * 100.0) / total);
+        System.out.printf("  Success rate:  %.1f%%%n", total > 0 ? (pass * 100.0) / total : 0.0);
         System.out.println("=".repeat(90));
     }
 
@@ -156,24 +156,25 @@ public class BatchEvaluator {
      */
     public void writeCsv(List<EvaluationEngine.EvalResult> results, Path outputPath) {
         try {
-            Files.createDirectories(outputPath.getParent());
+            Path parent = outputPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
         } catch (IOException e) {
             log.warn("Could not create output directory: {}", e.getMessage());
         }
 
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8))) {
-            writer.println("Row;Previous Coordinates;Current Coordinates;Current Road;Target Road;Detected Road;Result;Iterations;City");
+            writer.println("Row;Previous Coordinates;Current Coordinates;Target Road;Detected Road;Result;City");
 
             for (EvaluationEngine.EvalResult r : results) {
-                writer.printf("%d;\"%s\";\"%s\";%s;%s;%s;%s;%d;%s%n",
+                writer.printf("%d;\"%s\";\"%s\";%s;%s;%s;%s%n",
                         r.testCase().rowNumber(),
                         r.testCase().previousCoords().toApiString(),
                         r.testCase().currentCoords().toApiString(),
-                        r.testCase().currentRoad(),
                         r.testCase().targetRoad(),
                         r.detectedRoad(),
                         r.outcome(),
-                        r.iterationsUsed(),
                         r.testCase().city());
             }
 

@@ -3,6 +3,7 @@ package gr.crossstreet.geo;
 import gr.crossstreet.api.OverpassClient;
 import gr.crossstreet.model.GeoPoint;
 import gr.crossstreet.util.GreekTransliterator;
+import gr.crossstreet.util.RoadNameMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,7 +55,7 @@ public class IntersectionDetector {
             String name = resolveRoadName(way.tags());
             if (name == null) continue;
 
-            if (fuzzyMatchRoadName(name, currentRoadName)) {
+            if (RoadNameMatcher.fuzzyMatch(name, currentRoadName)) {
                 currentRoadWays.add(way);
             } else {
                 otherNamedWays.add(way);
@@ -73,10 +74,6 @@ public class IntersectionDetector {
         double refLat = userPosition.latitude();
         double refLon = userPosition.longitude();
         double cosRefLat = Math.cos(Math.toRadians(refLat));
-
-        // User position in local meters
-        double userX = 0;
-        double userY = 0;
 
         // 3. Collect all segments of the current road
         List<double[]> currentSegments = extractSegments(currentRoadWays, refLat, refLon, cosRefLat);
@@ -256,93 +253,4 @@ public class IntersectionDetector {
         return GreekTransliterator.transliterate(name);
     }
 
-    /**
-     * Fuzzy comparison of two road names, handling Greek transliteration variants.
-     */
-    private boolean fuzzyMatchRoadName(String a, String b) {
-        if (a == null || b == null) return false;
-
-        String normA = normalizeRoadName(a);
-        String normB = normalizeRoadName(b);
-
-        if (normA.equals(normB)) return true;
-        if (normA.contains(normB) || normB.contains(normA)) return true;
-
-        // Abbreviation match: "K Palama" should match "Kosti Palama"
-        if (abbreviationMatch(normA, normB)) return true;
-
-        // Last word match
-        String lastA = normA.contains(" ") ? normA.substring(normA.lastIndexOf(' ') + 1) : normA;
-        String lastB = normB.contains(" ") ? normB.substring(normB.lastIndexOf(' ') + 1) : normB;
-        if (levenshteinDistance(lastA, lastB) <= 2) return true;
-
-        int maxAllowed = Math.max(2, (int) (Math.min(normA.length(), normB.length()) * 0.3));
-        return levenshteinDistance(normA, normB) <= maxAllowed;
-    }
-
-    private String normalizeRoadName(String s) {
-        String r = s.trim().toLowerCase().replaceAll("\\s+", " ");
-        // Multi-char: digraphs first (order matters to avoid double-substitution)
-        r = r.replace("mp", "b");
-        r = r.replace("mb", "b");
-        r = r.replace("nt", "d");
-        r = r.replace("gk", "g");
-        r = r.replace("ou", "u");
-        r = r.replace("ch", "k");
-        r = r.replace("th", "t");
-        r = r.replace("ph", "f");
-        r = r.replace("ai", "e");
-        r = r.replace("ei", "i");
-        r = r.replace("oi", "i");
-        // Single-char
-        r = r.replace("j", "i");
-        r = r.replace("y", "i");
-        r = r.replace("x", "k");
-        r = r.replace("w", "o");
-        return r;
-    }
-
-    /**
-     * Checks if one name is an abbreviation of the other.
-     * Matches when single-letter words in one name are prefixes of
-     * corresponding words in the other (e.g., "k palama" matches "kosti palama").
-     */
-    private boolean abbreviationMatch(String a, String b) {
-        String[] wordsA = a.split(" ");
-        String[] wordsB = b.split(" ");
-        return abbreviationMatchDirectional(wordsA, wordsB) || abbreviationMatchDirectional(wordsB, wordsA);
-    }
-
-    private boolean abbreviationMatchDirectional(String[] shorter, String[] longer) {
-        if (shorter.length >= longer.length) return false;
-        // Try to match shorter words as prefixes of longer words in order
-        int li = 0;
-        for (String sw : shorter) {
-            boolean matched = false;
-            while (li < longer.length) {
-                if (longer[li].startsWith(sw)) {
-                    matched = true;
-                    li++;
-                    break;
-                }
-                li++;
-            }
-            if (!matched) return false;
-        }
-        return true;
-    }
-
-    private int levenshteinDistance(String s1, String s2) {
-        int len1 = s1.length(), len2 = s2.length();
-        int[][] dp = new int[len1 + 1][len2 + 1];
-        for (int i = 0; i <= len1; i++) dp[i][0] = i;
-        for (int j = 0; j <= len2; j++) dp[0][j] = j;
-        for (int i = 1; i <= len1; i++) {
-            for (int j = 1; j <= len2; j++) {
-                int cost = (s1.charAt(i - 1) == s2.charAt(j - 1)) ? 0 : 1;
-                dp[i][j] = Math.min(Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
-            }
-        }
-        return dp[len1][len2];
-    }
 }

@@ -7,7 +7,6 @@ public record TestCase(
         int rowNumber,
         GeoPoint previousCoords,
         GeoPoint currentCoords,
-        String currentRoad,
         String targetRoad,
         String city
 ) {

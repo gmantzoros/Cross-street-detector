@@ -116,13 +116,14 @@ public class DebugImageSaver {
 
             // Top info panel
             String detected = detection.roadName().orElse("?");
-            String topInfo = "#%03d | Current: %s | Target: %s | Detected: %s".formatted(
-                    tc.rowNumber(), tc.currentRoad(), tc.targetRoad(), detected);
+            String topInfo = "#%03d | Target: %s | Detected: %s".formatted(
+                    tc.rowNumber(), tc.targetRoad(), detected);
             drawTopPanel(g, IMAGE_SIZE, topInfo);
 
             // Bottom caption
-            String caption = "#%03d | Target: %s | Detected: %s".formatted(
-                    tc.rowNumber(), tc.targetRoad(), detected);
+            String caption = "#%03d | %s | dist=%.0fm | bearing=%.0f°".formatted(
+                    tc.rowNumber(), tc.city().isEmpty() ? "—" : tc.city(),
+                    detection.distanceMeters(), detection.bearingToIntersection());
             drawCaption(g, IMAGE_SIZE, IMAGE_SIZE, caption);
 
             g.dispose();
@@ -144,7 +145,6 @@ public class DebugImageSaver {
 
     private void drawRoadLabel(Graphics2D g, int x, int y, String name) {
         g.setFont(new Font("SansSerif", Font.PLAIN, 10));
-        FontMetrics fm = g.getFontMetrics();
         // Shadow
         g.setColor(new Color(0, 0, 0, 180));
         g.drawString(name, x + 1, y + 1);

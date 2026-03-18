@@ -15,10 +15,14 @@ public record GeoPoint(double latitude, double longitude) {
         if (parts.length != 2) {
             throw new IllegalArgumentException("Invalid coordinate format: '%s'. Expected 'lat, lon'.".formatted(coordString));
         }
-        return new GeoPoint(
-                Double.parseDouble(parts[0].trim()),
-                Double.parseDouble(parts[1].trim())
-        );
+        try {
+            return new GeoPoint(
+                    Double.parseDouble(parts[0].trim()),
+                    Double.parseDouble(parts[1].trim())
+            );
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Non-numeric coordinate in '%s'. Expected 'lat, lon'.".formatted(coordString), e);
+        }
     }
 
     /**
