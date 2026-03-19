@@ -859,9 +859,74 @@ The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which
 
 ---
 
-## 14. Limitations and Future Work
+## 14. Deployment and Hosting Costs
 
-### 14.1 Current Limitations
+### 14.1 Deployment Architecture
+
+The system is designed to run as two Docker containers deployed side-by-side (sidecar pattern):
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Host / VM / Pod                     │
+│                                                       │
+│  ┌───────────────────┐    ┌────────────────────────┐ │
+│  │  App API Container │    │  Overpass API Container │ │
+│  │  (Javalin on 8080) │──▶│  (Overpass on 12345)    │ │
+│  │                     │    │  Greek OSM extract      │ │
+│  │  Java 21 + fat JAR  │    │  ~500 MB disk (Greece)  │ │
+│  │  ~256 MB RAM         │    │  ~1-2 GB RAM            │ │
+│  └───────────────────┘    └────────────────────────┘ │
+│                                                       │
+│  Network: containers communicate via localhost /       │
+│  internal Docker network (no external Overpass calls)  │
+└─────────────────────────────────────────────────────┘
+```
+
+**Container 1 — Application API**: Runs the Cross-Street Detector fat JAR with Javalin serving the REST API on port 8080. Configured via the `OVERPASS_URL` environment variable to point to the local Overpass container instead of the public endpoint.
+
+**Container 2 — Overpass API (Greek data)**: Runs a self-hosted Overpass API instance (e.g., `wiktorn/overpass-api` Docker image) loaded with a Greek OSM extract. This eliminates dependence on the public `overpass-api.de` endpoint, removes rate limiting, and significantly reduces query latency.
+
+The two containers run as sidecars — they are co-located on the same host (or in the same Kubernetes pod) and communicate over the internal network. The only externally exposed port is 8080 (the app API).
+
+### 14.2 Resource Requirements
+
+| Resource | App API Container | Overpass API Container | Total |
+|----------|-------------------|------------------------|-------|
+| CPU | 0.5 vCPU | 1 vCPU | 1.5 vCPU |
+| RAM | 256 MB | 1–2 GB | ~2 GB |
+| Disk | ~50 MB (fat JAR) | ~500 MB (Greek extract + DB) | ~600 MB |
+
+The Overpass container is the heavier of the two. It needs enough RAM to hold the database indices for fast spatial queries. The Greek OSM extract is relatively small compared to a full planet file, keeping disk and memory requirements modest.
+
+### 14.3 Cost Estimate
+
+Since the system consists only of two Docker containers with no external API costs or paid dependencies, the entire operating cost is hosting:
+
+| Hosting Option | Estimated Monthly Cost | Notes |
+|----------------|----------------------|-------|
+| Small VPS (2 vCPU, 2 GB RAM) | 5–12 EUR/month | Hetzner, Contabo, OVH — sufficient for low-traffic use |
+| Cloud VM (e.g., AWS t3.small, GCP e2-small) | 15–25 EUR/month | 2 vCPU, 2 GB RAM, on-demand pricing |
+| Cloud VM with reserved/spot pricing | 8–15 EUR/month | 1-year commitment or spot instances |
+| Kubernetes pod (shared cluster) | Variable | If infrastructure already exists, marginal cost is minimal |
+
+**There are no per-request costs.** Unlike the earlier image-based version that relied on paid Google Maps APIs, this open-access version uses only OpenStreetMap data via the self-hosted Overpass instance. The Overpass API is free and open-source, and the OSM data is free under the ODbL license.
+
+**Cost summary**: The total cost of running this system is the cost of hosting a single small server (~2 GB RAM) capable of running 2 Docker containers. For a low-traffic deployment, this is approximately **5–15 EUR/month** depending on the hosting provider.
+
+### 14.4 Why a Self-Hosted Overpass Instance
+
+Running a private Overpass API container instead of using the public endpoint provides several advantages for production use:
+
+1. **No rate limiting**: The public Overpass API throttles requests to ~1 per 3 seconds per client. A self-hosted instance has no such restriction.
+2. **Lower latency**: Local container-to-container communication (sub-millisecond) versus public internet round-trip (100–500ms).
+3. **Reliability**: No dependence on third-party uptime. The public Overpass API occasionally experiences downtime or heavy load.
+4. **Data control**: The Greek extract can be updated on a schedule that suits the deployment, rather than relying on the public instance's update cycle.
+
+---
+
+## 15. Limitations and Future Work
+
+### 15.1 Current Limitations
 
 1. **OSM data quality**: The system's accuracy depends entirely on the completeness and correctness of OpenStreetMap road data. Missing roads, unnamed roads, or incorrect geometries will cause detection failures.
 2. **GPS accuracy**: Consumer GPS devices typically have 3–10 meter accuracy. If the user is far from their actual position, the bearing calculation may be inaccurate, and the auto-detection of the current road may fail.
@@ -869,7 +934,7 @@ The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which
 4. **Single-shot queries**: While the REST API enables integration with real-time clients, the detection pipeline itself handles single-shot queries. A real-time navigation system would need continuous GPS tracking, bearing smoothing, and incremental updates on the client side.
 5. **Greek-specific optimizations**: The transliteration and fuzzy matching logic is tailored for Greek street names. Supporting other languages with non-Latin scripts would require additional transliteration modules and normalized matching rules.
 
-### 14.2 Potential Improvements
+### 15.2 Potential Improvements
 
 1. **Bearing smoothing**: Using a Kalman filter or moving average over multiple GPS positions to reduce bearing noise.
 2. **Confidence scoring**: Assigning a confidence score to each detection based on distance, road geometry quality, and matching tier.
