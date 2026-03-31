@@ -679,13 +679,180 @@ Row;Previous Coordinates;Current Coordinates;Target Road;Detected Road;Result;Ci
 
 ---
 
-## 10. Configuration System
+## 10. Academic Test Data Generation
 
-### 10.1 Architecture
+### 10.1 Purpose
+
+The initial test dataset (`test-data.csv`) contained approximately 100 cases, predominantly from Athens. For academic evaluation, a larger and more geographically diverse dataset was needed — targeting approximately 500 cases across six Greek cities. The `TestDataGenerator` class automates the creation of an annotation-ready dataset by mining OpenStreetMap road geometries for realistic pedestrian GPS point pairs near intersections.
+
+### 10.2 Design Rationale
+
+The generator produces point pairs that simulate pedestrian walking — two consecutive GPS positions approximately 10–20 meters apart along a real road. Each pair is placed near a known intersection so that the cross-street detector has a meaningful cross-street to find. The actual cross-street name (ground truth) is intentionally left blank for manual annotation by a human via Google Maps, ensuring independent verification.
+
+### 10.3 City Distribution
+
+The generator targets six Greek cities with varying urban layouts:
+
+| City | Target Count | Query Radius | Characteristics |
+|------|-------------|--------------|-----------------|
+| Athens | 150 | 3000m | Dense urban grid, extensive road network |
+| Thessaloniki | 100 | 2500m | Second-largest city, mixed grid and irregular layout |
+| Patras | 80 | 2000m | Coastal grid city |
+| Heraklion | 60 | 2000m | Crete's largest city, historical center |
+| Larissa | 60 | 2000m | Central Greece, regular grid |
+| Volos | 50 | 2000m | Coastal city, compact center |
+
+### 10.4 Overpass Query
+
+For each city, the generator queries OSM for named roads of standard highway types within a radius of the city center:
+
+```
+[out:json][timeout:60];
+way["highway"~"primary|secondary|tertiary|residential"]["name"]
+(around:<radius>,<lat>,<lon>);
+out geom;
+```
+
+The `around` filter is used instead of a bounding box to produce a circular query area centered on the city. Only ways with a `name` tag are returned, since unnamed roads cannot serve as meaningful cross-streets. The `out geom` format provides inline geometry, consistent with the existing `OverpassClient` parser.
+
+### 10.5 Intersection Node Detection
+
+To ensure generated point pairs are near actual road intersections, the generator identifies **intersection nodes** — geometry coordinates shared by two or more OSM ways:
+
+```
+For each way in the query results:
+    For each geometry node (lat, lon):
+        key = round(lat, 7 decimals) + "," + round(lon, 7 decimals)
+        increment count for this key (once per way)
+
+Intersection nodes = keys with count ≥ 2
+```
+
+OSM ways that share a physical intersection point have identical geometry coordinates at that node. Rounding to 7 decimal places (sub-meter precision) handles any floating-point representation differences while maintaining accuracy.
+
+This approach does not identify the cross-street name — it only ensures the generated points are in locations where the detector will have a cross-street to find. The cross-street name is determined independently by the human annotator.
+
+### 10.6 Point Pair Generation Algorithm
+
+For each named road (OSM way), the generator walks along its geometry and emits point pairs:
+
+```
+cumulativeDistance = 0
+emitted = 0
+
+For each consecutive geometry node pair (prev, curr):
+    cumulativeDistance += haversineDistance(prev, curr)
+
+    if cumulativeDistance < 10m:
+        continue                      // Too close for a realistic GPS step
+
+    if current point is NOT within 150m of an intersection node:
+        continue                      // No cross-street nearby
+
+    if cumulativeDistance ≤ 20m:
+        pairPrev = previous geometry node
+    else:
+        pairPrev = interpolate a point ~15m back from current
+
+    if last emitted point is within 50m:
+        continue                      // Avoid clustering on the same road
+
+    emit (pairPrev, curr)
+    emitted++
+    cumulativeDistance = 0
+
+    if emitted ≥ 4:
+        stop                          // Max 4 pairs per road for diversity
+```
+
+Key parameters:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Min pair distance | 10m | Minimum realistic pedestrian GPS spacing |
+| Max pair distance | 20m | Maximum single-step GPS spacing |
+| Target pair distance | 15m | Used for interpolation when segments are long |
+| Intersection proximity | 150m | Ensures a cross-street exists ahead |
+| Max pairs per road | 4 | Forces road diversity in the dataset |
+| Min spacing between pairs | 50m | Prevents clustering of nearby pairs |
+
+### 10.7 Interpolation
+
+When the cumulative distance exceeds 20m (the maximum pair distance), the generator interpolates a point along the current segment to produce a pair with realistic spacing:
+
+```
+fraction = 1.0 − (targetDist / segmentDist)
+lat = prev.lat + fraction × (curr.lat − prev.lat)
+lon = prev.lon + fraction × (curr.lon − prev.lon)
+```
+
+This linear interpolation is sufficient given the small distances involved (the error from treating the Earth as flat over 15–20 meters is negligible).
+
+### 10.8 Sampling
+
+After generating all candidate pairs for a city, the generator shuffles them using a deterministic seed (the city name's hash code) and truncates to the target count. The deterministic seed ensures reproducibility — running the generator twice with the same OSM data produces the same dataset.
+
+### 10.9 Rate Limiting and Retry Logic
+
+The Overpass API's public endpoint enforces rate limits. The generator implements two layers of protection:
+
+1. **Inter-city delay**: A 5-second pause between city queries to avoid triggering rate limits.
+2. **Per-city retry**: If a city query fails (HTTP 429, 504, or timeout), the generator retries up to 3 times with a 30-second cooldown between attempts. This handles transient server-side issues such as the Overpass server being under load.
+
+The `OverpassClient`'s own retry logic (exponential backoff on 429/504) provides an additional layer of resilience within each query attempt.
+
+### 10.10 Output Format
+
+The generator produces a semicolon-delimited CSV with the following columns:
+
+```
+Previous Coordinates;Current Coordinates;Current Road;Target Road;Google Maps Link;City
+```
+
+- **Previous Coordinates**: The earlier GPS position (e.g., `37.983800, 23.727500`)
+- **Current Coordinates**: The current GPS position
+- **Current Road**: Left empty — auto-detected by the system at evaluation time
+- **Target Road**: Left empty — to be filled in by the human annotator
+- **Google Maps Link**: A Google Maps Directions URL from previous→current coordinates
+- **City**: The city name for reporting
+
+The Google Maps link uses the format:
+```
+https://www.google.com/maps/dir/<prevLat>,<prevLon>/<currLat>,<currLon>
+```
+
+This opens Google Maps showing a walking route from the previous to the current position, which reveals the user's walking direction. The annotator looks ahead in that direction to identify the next perpendicular cross-street.
+
+All coordinate values are formatted with `Locale.US` to ensure dot decimal separators regardless of the system's locale, which is essential for both Google Maps URL compatibility and `BatchEvaluator` CSV parsing.
+
+### 10.11 Annotation Workflow
+
+1. Open the generated `annotation-dataset.csv` in a spreadsheet application (Google Sheets or Excel)
+2. For each row, click the Google Maps Directions link
+3. The link shows a route from previous→current — this reveals the **walking direction**
+4. Look ahead in that direction and identify the next perpendicular cross-street on the map
+5. Type the cross-street name in the **Target Road** column
+6. Save as CSV — the annotated file can be used directly with `BatchEvaluator`
+
+### 10.12 Usage
+
+```bash
+# Generate with default output path (results/annotation-dataset.csv)
+java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.TestDataGenerator
+
+# Generate with custom output path
+java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.TestDataGenerator output.csv
+```
+
+---
+
+## 11. Configuration System
+
+### 11.1 Architecture
 
 `AppConfig` is a thread-safe singleton that loads configuration from `application.properties` on the classpath at first access. It supports environment variable substitution: any property value of the form `${ENV_VAR}` is replaced with the corresponding system environment variable at load time.
 
-### 10.2 Configuration Parameters
+### 11.2 Configuration Parameters
 
 | Property | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -694,7 +861,7 @@ Row;Previous Coordinates;Current Coordinates;Target Road;Detected Road;Result;Ci
 | `http.connect.timeout.seconds` | `10` | Integer | TCP connection timeout for OkHttp client |
 | `http.read.timeout.seconds` | `30` | Integer | Read timeout for OkHttp client |
 
-### 10.3 Environment Variable Substitution
+### 11.3 Environment Variable Substitution
 
 To use a different Overpass endpoint (e.g., a self-hosted instance), set the property to an environment variable reference:
 
@@ -711,11 +878,11 @@ The resolution happens once at startup. If the environment variable is not set, 
 
 ---
 
-## 11. Data Models
+## 12. Data Models
 
 All data models are implemented as Java 21 records (immutable value types with compiler-generated `equals()`, `hashCode()`, and `toString()`).
 
-### 11.1 GeoPoint
+### 12.1 GeoPoint
 
 ```java
 public record GeoPoint(double latitude, double longitude)
@@ -725,7 +892,7 @@ Represents a geographic coordinate pair. Provides:
 - `parse(String)`: Parses "lat, lon" strings (with flexible whitespace)
 - `toApiString()`: Formats as "lat,lon" (no space, for API calls)
 
-### 11.2 DetectionResult
+### 12.2 DetectionResult
 
 ```java
 public record DetectionResult(
@@ -739,7 +906,7 @@ public record DetectionResult(
 
 The output of the detection pipeline. Contains the intersection coordinates, distance, bearing, and the resolved road name. The `roadName` is `Optional.empty()` when no intersection was found.
 
-### 11.3 TestCase
+### 12.3 TestCase
 
 ```java
 public record TestCase(
@@ -753,7 +920,7 @@ public record TestCase(
 
 A single test case from the batch evaluation dataset. The current road is auto-detected at runtime rather than provided as input.
 
-### 11.5 EvalResult
+### 12.4 EvalResult
 
 ```java
 public record EvalResult(
@@ -766,7 +933,7 @@ public record EvalResult(
 
 Defined as an inner record of `EvaluationEngine`. Represents the result of evaluating a single test case. The `outcome` is one of `PASS`, `FAIL`, or `ERROR`.
 
-### 11.6 Overpass Data Records
+### 12.5 Overpass Data Records
 
 ```java
 public record LatLon(double lat, double lon)
@@ -776,7 +943,7 @@ public record OverpassData(List<OsmWay> ways)
 
 Typed representations of Overpass API response data. `OsmWay` contains the full inline geometry (coordinate list) and all OSM tags.
 
-### 11.7 Intersection
+### 12.6 Intersection
 
 ```java
 public record Intersection(
@@ -791,9 +958,9 @@ Defined as an inner record of `IntersectionDetector`. Represents a single detect
 
 ---
 
-## 12. Evolution from Image-Based to Geometry-Based Detection
+## 13. Evolution from Image-Based to Geometry-Based Detection
 
-### 12.1 Original Image-Based Approach
+### 13.1 Original Image-Based Approach
 
 The initial version of the system (not on this branch) used a five-step pipeline:
 
@@ -803,7 +970,7 @@ The initial version of the system (not on this branch) used a five-step pipeline
 4. **Point projection**: Converted the pixel distance to a geographic coordinate using the image scale (0.265 m/pixel at zoom 18).
 5. **Road name resolution**: Used the Google Roads API to snap the projected point to the nearest road, then the Geocoding API to resolve the road's name.
 
-### 12.2 Limitations of the Image-Based Approach
+### 13.2 Limitations of the Image-Based Approach
 
 1. **Proprietary API dependency**: Required a Google Maps API key with three enabled APIs (Static Maps, Roads, Geocoding), incurring costs and creating a barrier to reproducibility.
 2. **Image rendering artifacts**: Antialiasing, road width variations at different zoom levels, and overlapping roads could produce false positives or missed detections during pixel scanning.
@@ -811,7 +978,7 @@ The initial version of the system (not on this branch) used a five-step pipeline
 4. **Single-direction detection**: The algorithm chose the closer of the two perpendicular scan results, meaning it could only detect one direction at a time.
 5. **No road name awareness during scanning**: The pixel scan had no knowledge of which road it was detecting — it simply found the nearest green pixel, which could be any road (including the user's own road if the geometry was complex).
 
-### 12.3 Advantages of the Geometry-Based Approach
+### 13.3 Advantages of the Geometry-Based Approach
 
 1. **Open access**: Relies solely on OpenStreetMap data via the free Overpass API. No API keys, no costs, no proprietary dependencies.
 2. **Direct intersection computation**: Instead of inferring road positions from pixels, the system computes exact geometric intersections between road segments. This eliminates all image-related artifacts.
@@ -820,7 +987,7 @@ The initial version of the system (not on this branch) used a five-step pipeline
 5. **Simpler, more maintainable**: The geometry-based approach is conceptually clearer and has fewer tunable parameters (no zoom level, pixel scale, skip pixels, scan angle offset).
 6. **Reproducibility**: Any researcher can reproduce results without setting up API keys or configuring image rendering services.
 
-### 12.4 What Was Removed
+### 13.4 What Was Removed
 
 - `GoogleMapsClient`: HTTP client for Google Maps Static API
 - `RoadFinderClient`: HTTP client for Google Roads API and Geocoding API
@@ -828,7 +995,7 @@ The initial version of the system (not on this branch) used a five-step pipeline
 - `OverpassMapRenderer`: Java2D rendering of OSM roads as green-on-black images
 - Image-specific configuration: `staticmap.zoom`, `staticmap.size`, `staticmap.scale`, `image.skip.pixels`, `image.scale`, `detection.angle.offset`
 
-### 12.5 What Was Added
+### 13.5 What Was Added
 
 - `ApiServer`: REST API server using Javalin, providing HTTP access to the detection pipeline
 - `IntersectionDetector`: Full geometry-based intersection detection engine with auto-detection of current road
@@ -840,7 +1007,7 @@ The initial version of the system (not on this branch) used a five-step pipeline
 
 ---
 
-## 13. Technology Stack
+## 14. Technology Stack
 
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
@@ -856,71 +1023,6 @@ The initial version of the system (not on this branch) used a five-step pipeline
 | External API | Overpass API | 0.7.x | OSM data query engine |
 
 The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which bundles all dependencies into a single executable JAR file. The default main class is `ApiServer` (REST API); the CLI entry point (`CrossStreetDetectorApp`) can be invoked via `-cp`.
-
----
-
-## 14. Deployment and Hosting Costs
-
-### 14.1 Deployment Architecture
-
-The system is designed to run as two Docker containers deployed side-by-side (sidecar pattern):
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Host / VM / Pod                     │
-│                                                       │
-│  ┌───────────────────┐    ┌────────────────────────┐ │
-│  │  App API Container │    │  Overpass API Container │ │
-│  │  (Javalin on 8080) │──▶│  (Overpass on 12345)    │ │
-│  │                     │    │  Greek OSM extract      │ │
-│  │  Java 21 + fat JAR  │    │  ~500 MB disk (Greece)  │ │
-│  │  ~256 MB RAM         │    │  ~1-2 GB RAM            │ │
-│  └───────────────────┘    └────────────────────────┘ │
-│                                                       │
-│  Network: containers communicate via localhost /       │
-│  internal Docker network (no external Overpass calls)  │
-└─────────────────────────────────────────────────────┘
-```
-
-**Container 1 — Application API**: Runs the Cross-Street Detector fat JAR with Javalin serving the REST API on port 8080. Configured via the `OVERPASS_URL` environment variable to point to the local Overpass container instead of the public endpoint.
-
-**Container 2 — Overpass API (Greek data)**: Runs a self-hosted Overpass API instance (e.g., `wiktorn/overpass-api` Docker image) loaded with a Greek OSM extract. This eliminates dependence on the public `overpass-api.de` endpoint, removes rate limiting, and significantly reduces query latency.
-
-The two containers run as sidecars — they are co-located on the same host (or in the same Kubernetes pod) and communicate over the internal network. The only externally exposed port is 8080 (the app API).
-
-### 14.2 Resource Requirements
-
-| Resource | App API Container | Overpass API Container | Total |
-|----------|-------------------|------------------------|-------|
-| CPU | 0.5 vCPU | 1 vCPU | 1.5 vCPU |
-| RAM | 256 MB | 1–2 GB | ~2 GB |
-| Disk | ~50 MB (fat JAR) | ~500 MB (Greek extract + DB) | ~600 MB |
-
-The Overpass container is the heavier of the two. It needs enough RAM to hold the database indices for fast spatial queries. The Greek OSM extract is relatively small compared to a full planet file, keeping disk and memory requirements modest.
-
-### 14.3 Cost Estimate
-
-Since the system consists only of two Docker containers with no external API costs or paid dependencies, the entire operating cost is hosting:
-
-| Hosting Option | Estimated Monthly Cost | Notes |
-|----------------|----------------------|-------|
-| Small VPS (2 vCPU, 2 GB RAM) | 5–12 EUR/month | Hetzner, Contabo, OVH — sufficient for low-traffic use |
-| Cloud VM (e.g., AWS t3.small, GCP e2-small) | 15–25 EUR/month | 2 vCPU, 2 GB RAM, on-demand pricing |
-| Cloud VM with reserved/spot pricing | 8–15 EUR/month | 1-year commitment or spot instances |
-| Kubernetes pod (shared cluster) | Variable | If infrastructure already exists, marginal cost is minimal |
-
-**There are no per-request costs.** Unlike the earlier image-based version that relied on paid Google Maps APIs, this open-access version uses only OpenStreetMap data via the self-hosted Overpass instance. The Overpass API is free and open-source, and the OSM data is free under the ODbL license.
-
-**Cost summary**: The total cost of running this system is the cost of hosting a single small server (~2 GB RAM) capable of running 2 Docker containers. For a low-traffic deployment, this is approximately **5–15 EUR/month** depending on the hosting provider.
-
-### 14.4 Why a Self-Hosted Overpass Instance
-
-Running a private Overpass API container instead of using the public endpoint provides several advantages for production use:
-
-1. **No rate limiting**: The public Overpass API throttles requests to ~1 per 3 seconds per client. A self-hosted instance has no such restriction.
-2. **Lower latency**: Local container-to-container communication (sub-millisecond) versus public internet round-trip (100–500ms).
-3. **Reliability**: No dependence on third-party uptime. The public Overpass API occasionally experiences downtime or heavy load.
-4. **Data control**: The Greek extract can be updated on a schedule that suits the deployment, rather than relying on the public instance's update cycle.
 
 ---
 
