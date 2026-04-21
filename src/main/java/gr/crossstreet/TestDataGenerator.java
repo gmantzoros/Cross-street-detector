@@ -33,10 +33,9 @@ public class TestDataGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(TestDataGenerator.class);
 
-    private static final double MIN_PAIR_DISTANCE_M = 10.0;
-    private static final double MAX_PAIR_DISTANCE_M = 20.0;
     private static final double TARGET_PAIR_DISTANCE_M = 15.0;
-    private static final double INTERSECTION_PROXIMITY_M = 150.0;
+    /** Minimum distance from each intersection endpoint when placing mid-block pairs. */
+    private static final double MIN_SETBACK_M = 30.0;
     private static final int MAX_PAIRS_PER_ROAD = 4;
     private static final long OVERPASS_DELAY_MS = 5000;
     private static final int MAX_CITY_RETRIES = 3;
@@ -184,82 +183,73 @@ public class TestDataGenerator {
     }
 
     /**
-     * Generates point pairs along a road's geometry, filtering for proximity to intersections.
+     * Generates mid-block point pairs along a road's geometry.
+     *
+     * <p>For each arc between two consecutive intersection nodes, if the arc is long enough,
+     * a point pair is placed at least MIN_SETBACK_M from each intersection — i.e., clearly
+     * mid-block. This makes annotation unambiguous: the next cross street ahead is obvious.</p>
      */
     private List<PointPair> generatePairsAlongRoad(OsmWay way, Set<String> intersectionKeys, String cityName) {
         List<PointPair> pairs = new ArrayList<>();
         List<LatLon> geometry = way.geometry();
 
-        int emitted = 0;
-        double cumulativeDistance = 0.0;
-        GeoPoint lastEmittedPoint = null;
-
-        for (int i = 1; i < geometry.size() && emitted < MAX_PAIRS_PER_ROAD; i++) {
-            GeoPoint prev = toGeoPoint(geometry.get(i - 1));
-            GeoPoint curr = toGeoPoint(geometry.get(i));
-
-            double segmentDist = GeoUtils.haversineDistance(prev, curr);
-            cumulativeDistance += segmentDist;
-
-            // We want pairs that are ~10-20m apart
-            if (cumulativeDistance < MIN_PAIR_DISTANCE_M) continue;
-
-            // Check if the current point is near an intersection node
-            if (!isNearIntersection(curr, intersectionKeys, geometry)) continue;
-
-            // If we need to interpolate to get the right distance, use the segment endpoints
-            // For simplicity, use the previous and current geometry nodes as the pair
-            // when they are within our distance range
-            GeoPoint pairPrev;
-            if (cumulativeDistance <= MAX_PAIR_DISTANCE_M) {
-                pairPrev = toGeoPoint(geometry.get(i - 1));
-            } else {
-                // Interpolate a point ~TARGET_PAIR_DISTANCE_M back from current along the segment
-                pairPrev = interpolateBack(prev, curr, segmentDist, TARGET_PAIR_DISTANCE_M);
+        // Collect indices of intersection nodes in this road's geometry
+        List<Integer> intxIndices = new ArrayList<>();
+        for (int i = 0; i < geometry.size(); i++) {
+            if (intersectionKeys.contains(nodeKey(geometry.get(i).lat(), geometry.get(i).lon()))) {
+                intxIndices.add(i);
             }
+        }
 
-            // Avoid pairs too close to each other on the same road
-            if (lastEmittedPoint != null && GeoUtils.haversineDistance(lastEmittedPoint, curr) < 50.0) {
-                continue;
+        // For each arc between consecutive intersection nodes, try to place one mid-block pair
+        for (int k = 0; k + 1 < intxIndices.size() && pairs.size() < MAX_PAIRS_PER_ROAD; k++) {
+            int i1 = intxIndices.get(k);
+            int i2 = intxIndices.get(k + 1);
+
+            // Build list of points along this arc and their cumulative distances
+            List<GeoPoint> arc = new ArrayList<>();
+            for (int i = i1; i <= i2; i++) arc.add(toGeoPoint(geometry.get(i)));
+
+            double[] cumDist = new double[arc.size()];
+            for (int i = 1; i < arc.size(); i++) {
+                cumDist[i] = cumDist[i - 1] + GeoUtils.haversineDistance(arc.get(i - 1), arc.get(i));
             }
+            double arcLen = cumDist[arc.size() - 1];
 
-            pairs.add(new PointPair(pairPrev, curr, cityName));
-            lastEmittedPoint = curr;
-            emitted++;
-            cumulativeDistance = 0.0;
+            // Arc must be long enough to place both points clearly away from both intersections
+            double minArcLen = MIN_SETBACK_M * 2 + TARGET_PAIR_DISTANCE_M;
+            if (arcLen < minArcLen) continue;
+
+            // Place curr at MIN_SETBACK from I1, prev TARGET_PAIR_DISTANCE_M before curr.
+            // Both points are well within the arc and away from the intersections.
+            double currDist = MIN_SETBACK_M + TARGET_PAIR_DISTANCE_M / 2;
+            double prevDist = currDist - TARGET_PAIR_DISTANCE_M;
+
+            GeoPoint curr = interpolateAlongArc(arc, cumDist, currDist);
+            GeoPoint prev = interpolateAlongArc(arc, cumDist, prevDist);
+
+            pairs.add(new PointPair(prev, curr, cityName));
         }
 
         return pairs;
     }
 
     /**
-     * Checks whether a point is within INTERSECTION_PROXIMITY_M of any intersection node
-     * on this road's geometry.
+     * Interpolates a point at {@code targetDist} meters from the arc start.
      */
-    private boolean isNearIntersection(GeoPoint point, Set<String> intersectionKeys, List<LatLon> geometry) {
-        for (LatLon node : geometry) {
-            String key = nodeKey(node.lat(), node.lon());
-            if (intersectionKeys.contains(key)) {
-                double dist = GeoUtils.haversineDistance(point, toGeoPoint(node));
-                if (dist <= INTERSECTION_PROXIMITY_M) {
-                    return true;
-                }
+    private GeoPoint interpolateAlongArc(List<GeoPoint> arc, double[] cumDist, double targetDist) {
+        targetDist = Math.max(0, Math.min(cumDist[cumDist.length - 1], targetDist));
+        for (int i = 1; i < arc.size(); i++) {
+            if (cumDist[i] >= targetDist) {
+                double segLen = cumDist[i] - cumDist[i - 1];
+                if (segLen < 0.001) return arc.get(i);
+                double frac = (targetDist - cumDist[i - 1]) / segLen;
+                double lat = arc.get(i - 1).latitude() + frac * (arc.get(i).latitude() - arc.get(i - 1).latitude());
+                double lon = arc.get(i - 1).longitude() + frac * (arc.get(i).longitude() - arc.get(i - 1).longitude());
+                return new GeoPoint(lat, lon);
             }
         }
-        return false;
-    }
-
-    /**
-     * Interpolates a point that is {@code targetDist} meters back from {@code curr}
-     * along the segment from {@code prev} to {@code curr}.
-     */
-    private GeoPoint interpolateBack(GeoPoint prev, GeoPoint curr, double segmentDist, double targetDist) {
-        if (segmentDist < 0.001) return prev;
-        double fraction = 1.0 - (targetDist / segmentDist);
-        if (fraction < 0) fraction = 0;
-        double lat = prev.latitude() + fraction * (curr.latitude() - prev.latitude());
-        double lon = prev.longitude() + fraction * (curr.longitude() - prev.longitude());
-        return new GeoPoint(lat, lon);
+        return arc.getLast();
     }
 
     private static GeoPoint toGeoPoint(LatLon ll) {
@@ -267,7 +257,8 @@ public class TestDataGenerator {
     }
 
     /**
-     * Writes the generated dataset to a semicolon-delimited CSV compatible with BatchEvaluator.
+     * Writes the generated dataset in the annotation CSV format:
+     * Previous Coordinates, Current Coordinates, Target Road (blank), Google Maps Link, City.
      */
     private void writeCsv(List<PointPair> pairs, Path outputPath) {
         try {
@@ -280,20 +271,20 @@ public class TestDataGenerator {
         }
 
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8))) {
-            // Header compatible with BatchEvaluator's parseLine (6 columns, semicolon-delimited)
-            writer.println("Previous Coordinates;Current Coordinates;Current Road;Target Road;Google Maps Link;City");
+            writer.println("Previous Coordinates;Current Coordinates;Target Road;Google Maps Link;City");
 
             for (PointPair pair : pairs) {
-                String prevCoords = String.format(Locale.US, "%.6f, %.6f", pair.previous().latitude(), pair.previous().longitude());
-                String currCoords = String.format(Locale.US, "%.6f, %.6f", pair.current().latitude(), pair.current().longitude());
-
+                String prevCoords = String.format(Locale.US, "%.6f, %.6f",
+                        pair.previous().latitude(), pair.previous().longitude());
+                String currCoords = String.format(Locale.US, "%.6f, %.6f",
+                        pair.current().latitude(), pair.current().longitude());
                 String googleMapsLink = String.format(Locale.US,
                         "https://www.google.com/maps/dir/%.6f,%.6f/%.6f,%.6f",
                         pair.previous().latitude(), pair.previous().longitude(),
                         pair.current().latitude(), pair.current().longitude());
 
-                // Current Road left empty (auto-detected); Target Road left empty (for annotation)
-                writer.printf("%s;%s;;;%s;%s%n",
+                // Target Road left blank for human annotation
+                writer.printf(Locale.US, "%s;%s;;%s;%s%n",
                         prevCoords, currCoords, googleMapsLink, pair.cityName());
             }
 

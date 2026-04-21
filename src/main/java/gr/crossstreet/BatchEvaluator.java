@@ -24,7 +24,7 @@ public class BatchEvaluator {
     private static final Logger log = LoggerFactory.getLogger(BatchEvaluator.class);
 
     public static void main(String[] args) {
-        String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test-data.csv";
+        String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test_data_annotation.csv";
         String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results.csv";
 
         BatchEvaluator evaluator = new BatchEvaluator();
@@ -36,8 +36,8 @@ public class BatchEvaluator {
 
     /**
      * Reads the CSV file and parses each row into a TestCase.
-     * Supports both comma and semicolon delimiters (Greek/EU locale exports with semicolons).
-     * Expects columns: Previous Coordinates, Current Coordinates, Current Road, Target Road, Result, City.
+     * Expects columns: Previous Coordinates, Current Coordinates, Target Road, Google Maps Link, City.
+     * Quoted fields (e.g., coordinates containing commas) are handled correctly.
      */
     public List<TestCase> loadCsv(Path csvPath) {
         List<TestCase> testCases = new ArrayList<>();
@@ -70,23 +70,41 @@ public class BatchEvaluator {
     }
 
     private TestCase parseLine(String line, int rowNumber) {
-        String delimiter = line.contains(";") ? ";" : ",";
-        String[] parts = line.split(delimiter);
+        List<String> parts = parseCsvLine(line);
 
-        if (parts.length < 4) {
+        if (parts.size() < 3) {
             throw new IllegalArgumentException("Could not parse line: " + line);
         }
 
-        String prevCoords = parts[0].trim();
-        String currCoords = parts[1].trim();
-        // parts[2] is current road — skipped, now auto-detected
-        String targetRoad = parts[3].trim();
-        String city = parts.length >= 6 ? parts[5].trim() : "";
+        String prevCoords = parts.get(0);
+        String currCoords = parts.get(1);
+        String targetRoad = parts.get(2);
+        String city = parts.size() >= 5 ? parts.get(4) : "";
 
         return new TestCase(rowNumber,
                 GeoPoint.parse(prevCoords),
                 GeoPoint.parse(currCoords),
                 targetRoad, city);
+    }
+
+    /** Tokenizes one CSV line, respecting double-quoted fields. */
+    private static List<String> parseCsvLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        boolean inQuotes = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"') {
+                inQuotes = !inQuotes;
+            } else if (c == ',' && !inQuotes) {
+                fields.add(sb.toString().trim());
+                sb.setLength(0);
+            } else {
+                sb.append(c);
+            }
+        }
+        fields.add(sb.toString().trim());
+        return fields;
     }
 
     /**

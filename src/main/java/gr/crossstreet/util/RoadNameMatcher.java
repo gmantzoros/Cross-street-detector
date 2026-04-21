@@ -1,8 +1,13 @@
 package gr.crossstreet.util;
 
+import java.text.Normalizer;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Shared fuzzy matching logic for Greek road names.
- * Handles transliteration variants, abbreviations, and last-word suffix matching.
+ * Handles accent stripping, abbreviations, and last-word suffix matching.
  */
 public final class RoadNameMatcher {
 
@@ -19,6 +24,12 @@ public final class RoadNameMatcher {
         String normB = normalize(b);
 
         if (normA.equals(normB)) return true;
+
+        // Same words, different order (e.g., "Τσαλδάρη Κωνσταντίνου" vs "Κωνσταντίνου Τσαλδάρη")
+        Set<String> setA = new HashSet<>(Arrays.asList(normA.split(" ")));
+        Set<String> setB = new HashSet<>(Arrays.asList(normB.split(" ")));
+        if (setA.equals(setB)) return true;
+
         if (normA.contains(normB) || normB.contains(normA)) return true;
         if (abbreviationMatch(normA, normB)) return true;
 
@@ -33,28 +44,13 @@ public final class RoadNameMatcher {
     }
 
     /**
-     * Lowercases and maps common Greek transliteration variants to a canonical form.
+     * Lowercases and strips Greek tonos/accent marks for canonical comparison.
      */
     public static String normalize(String s) {
-        String r = s.trim().toLowerCase().replaceAll("\\s+", " ");
-        // Multi-char: digraphs first (order matters to avoid double-substitution)
-        r = r.replace("mp", "b");
-        r = r.replace("mb", "b");
-        r = r.replace("nt", "d");
-        r = r.replace("gk", "g");
-        r = r.replace("ou", "u");
-        r = r.replace("ch", "k");
-        r = r.replace("th", "t");
-        r = r.replace("ph", "f");
-        r = r.replace("ai", "e");
-        r = r.replace("ei", "i");
-        r = r.replace("oi", "i");
-        // Single-char
-        r = r.replace("j", "i");
-        r = r.replace("y", "i");
-        r = r.replace("x", "k");
-        r = r.replace("w", "o");
-        return r;
+        // Decompose Unicode (e.g., ά → α + combining tonos) then strip combining marks
+        String r = Normalizer.normalize(s.trim().toLowerCase(), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+        return r.replaceAll("\\s+", " ");
     }
 
     /**

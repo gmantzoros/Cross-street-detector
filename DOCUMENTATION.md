@@ -94,8 +94,8 @@ Phase 4: Geometry-Based Intersection Detection
 │                      Support Components                         │
 │  ┌────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
 │  │   AppConfig    │  │GreekTransliterator│ │ RoadNameMatcher│  │
-│  │ (singleton,    │  │(ELOT 743-like     │ │ (fuzzy Greek   │  │
-│  │  env vars)     │  │ Greek→Latin)      │ │  name matching)│  │
+│  │ (singleton,    │  │(retained for      │ │ (fuzzy Greek   │  │
+│  │  env vars)     │  │ future use)       │ │  name matching)│  │
 │  └────────────────┘  └──────────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -209,8 +209,10 @@ The method begins by classifying all OSM ways from the Overpass data into two gr
 2. **Other named ways**: All remaining ways that have a name tag. Unnamed ways (service roads, unnamed alleys) are excluded since they cannot provide meaningful cross-street information.
 
 The road name resolution uses a priority scheme:
-- First, check for `name:en` (English name tag). If present and non-blank, use it.
-- Otherwise, use the `name` tag and transliterate it from Greek to Latin script using `GreekTransliterator`.
+- First, use the `name` tag (the native Greek name from OSM). If present and non-blank, use it.
+- Otherwise, fall back to `name:en` (the English name tag) if available.
+
+This ensures the system operates entirely in Greek script, matching OSM road names directly against Greek target names without any transliteration step.
 
 ### 4.3 Step 2: Segment Extraction
 
@@ -304,111 +306,86 @@ In practice, with a 200m query radius in an urban Greek context, a typical query
 
 ### 5.1 The Challenge of Greek Street Names
 
-Greek street names present unique challenges for string matching:
+Both OSM road names and test dataset target names are in Greek script. String matching between them presents the following challenges:
 
-1. **Multiple script representations**: OSM ways may have names in Greek script (e.g., "Κρέμου"), in the English `name:en` tag (e.g., "Kremou"), or in transliterated Latin script using various conventions.
+1. **Accent marks (tonos)**: The same road may appear with or without accent marks in different OSM ways or data sources. For example, "Βιθυνίας" and "Βιθυνιας" are the same name with and without the tonos on ί.
 
-2. **Transliteration ambiguity**: Greek-to-Latin transliteration is not standardized. The street name "Μπουμπουλίνας" might be transliterated as "Bouboulinas", "Bumpoulinas", or "Mpompoulinas" depending on the system used.
+2. **Word order variation**: OSM may store a street name in a different word order than the annotated target. For example, "Κωνσταντίνου Τσαλδάρη" and "Τσαλδάρη Κωνσταντίνου" refer to the same street.
 
-3. **Abbreviations**: Greek street names commonly use abbreviations. "Κωνσταντίνου Παλαμά" (Konstantinou Palama) is often shortened to "K. Palama" or "K Palama".
+3. **Abbreviations**: Greek street names commonly use abbreviations. "Κωνσταντίνου Παλαμά" is often shortened to "Κ. Παλαμά".
 
-4. **Last-name emphasis**: Greek street names typically consist of a first name and last name (e.g., "Panagi Tsaldari"). The last name (surname) is the most distinctive and recognizable part.
+4. **Last-name emphasis**: Greek street names typically consist of a first name and last name. The surname (last word) is the most distinctive and recognizable part.
 
-### 5.2 Greek-to-Latin Transliteration
+### 5.2 Road Name Normalization
 
-The `GreekTransliterator` class implements a rule-based transliteration system following ELOT 743-like conventions. The transliteration proceeds character by character, with digraph (two-character) patterns taking priority over single characters.
-
-**Digraph mappings** (processed first to avoid partial matches):
-
-| Greek | Latin | Example |
-|-------|-------|---------|
-| μπ | b | Μπουμπουλίνας → Bouboulinas |
-| ντ | nt | Αντώνη → Antoni |
-| γκ | gk | Αγκίστρι → Agkistri |
-| γγ | ng | Αγγελική → Angeliki |
-| ου | ou | Κρέμου → Kremou |
-| αυ | av | Αυλώνος → Avlonos |
-| ευ | ev | Ευαγγέλου → Evangelou |
-| αι | ai | Αιόλου → Aiolou |
-| ει | ei | Ειρήνης → Eirinis |
-| οι | oi | Οικονόμου → Oikonomou |
-| τσ | ts | Τσαλδάρη → Tsaldari |
-| τζ | tz | Τζαβέλα → Tzavela |
-
-**Single character mappings** cover all 24 letters of the Greek alphabet plus accented vowels (ά, έ, ή, ί, ό, ύ, ώ), diaeresis forms (ϊ, ϋ), and final sigma (ς → s).
-
-**Implementation**: `GreekTransliterator.transliterate()` uses a `LinkedHashMap` to maintain insertion order, ensuring that digraph entries are checked before their constituent single characters. The algorithm iterates through the input string, attempting a 2-character match first; if none is found, it falls back to a 1-character match; if the character is not Greek, it passes through unchanged.
-
-### 5.3 Road Name Normalization
-
-Before fuzzy matching, road names undergo normalization to collapse common transliteration variants into a canonical form:
+Before fuzzy matching, road names undergo normalization to produce a canonical Greek form:
 
 ```
-Step 1: Lowercase and collapse whitespace
-Step 2: Apply digraph normalizations (order matters):
-   "mp" → "b"     (handles μπ → mp → b)
-   "mb" → "b"     (alternative for μπ)
-   "nt" → "d"     (handles ντ → nt → d)
-   "gk" → "g"     (handles γκ → gk → g)
-   "ou" → "u"     (handles ου → ou → u)
-   "ch" → "k"     (handles χ → ch → k)
-   "th" → "t"     (handles θ → th → t)
-   "ph" → "f"     (handles φ → ph → f)
-   "ai" → "e"     (handles αι → ai → e)
-   "ei" → "i"     (handles ει → ei → i)
-   "oi" → "i"     (handles οι → oi → i)
-Step 3: Apply single-character normalizations:
-   "j" → "i", "y" → "i", "x" → "k", "w" → "o"
+Step 1: Lowercase the string (Greek Unicode lowercase)
+Step 2: Unicode NFD decomposition — decomposes precomposed characters
+        (e.g., ά → α + combining tonos mark)
+Step 3: Strip all Unicode combining marks (category \p{M}) —
+        removes tonos, diaeresis, and other diacritics
+Step 4: Collapse consecutive whitespace to a single space
 ```
 
-The purpose of this normalization is not to produce correct Greek pronunciation, but to ensure that different transliterations of the same Greek name converge to the same canonical string. For example:
+The result is an unaccented, lowercase Greek string. Examples:
 
-- "Theochari" and "Theoxari" both normalize to "teokari" (th→t, ch/x→k)
-- "Boupoulinas" and "Mpompoulinas" both normalize to "bublinas" (mp→b, ou→u)
+- "Βιθυνίας" → "βιθυνιας"
+- "Κωνσταντίνου Τσαλδάρη" → "κωνσταντινου τσαλδαρη"
+- "ΑΓΙΟΥ ΑΡΤΕΜΙΟΥ" → "αγιου αρτεμιου"
 
-### 5.4 Multi-Tier Fuzzy Matching
+**Implementation**: `RoadNameMatcher.normalize()` uses `java.text.Normalizer.normalize(s, Form.NFD)` followed by `replaceAll("\\p{M}", "")`.
 
-The fuzzy matching algorithm (`RoadNameMatcher.fuzzyMatch()`, shared by both `IntersectionDetector` and `EvaluationEngine`) employs five matching tiers, evaluated in order of decreasing strictness:
+### 5.3 Multi-Tier Fuzzy Matching
+
+The fuzzy matching algorithm (`RoadNameMatcher.fuzzyMatch()`, shared by both `IntersectionDetector` and `EvaluationEngine`) employs six matching tiers, evaluated in order of decreasing strictness:
 
 **Tier 1: Exact match after normalization**
 ```
-normalize("K Palama") = "k palaba"
-normalize("K Palama") = "k palaba"
+normalize("Βιθυνίας") = "βιθυνιας"
+normalize("Βιθυνιας") = "βιθυνιας"
 → MATCH
 ```
 
-**Tier 2: Substring containment**
+**Tier 2: Word-set equality (order-independent)**
 ```
-normalize("Panagi Tsaldari") contains normalize("P Tsaldari")
-→ Check: "panagi tsaldari" contains "p tsaldari"? No.
-→ Check: "p tsaldari" contains "panagi tsaldari"? No.
-→ NO MATCH (fall through)
+normalize("Κωνσταντίνου Τσαλδάρη") → words: {"κωνσταντινου", "τσαλδαρη"}
+normalize("Τσαλδάρη Κωνσταντίνου") → words: {"τσαλδαρη", "κωνσταντινου"}
+Sets are equal → MATCH
 ```
 
-**Tier 3: Abbreviation matching**
+This tier handles the common case where OSM stores a name in reverse word order compared to the annotated target.
+
+**Tier 3: Substring containment**
+```
+if normalize(A) contains normalize(B), or vice versa → MATCH
+```
+
+**Tier 4: Abbreviation matching**
 Checks whether the shorter name's words are prefixes of the longer name's words in sequential order:
 
 ```
-shorter = ["k", "palaba"]
-longer  = ["kosti", "palaba"]
+shorter = ["κ", "παλαμα"]
+longer  = ["κωνσταντινου", "παλαμα"]
 
-"k" is a prefix of "kosti" → matched
-"palaba" is a prefix of "palaba" → matched
+"κ" is a prefix of "κωνσταντινου" → matched
+"παλαμα" is a prefix of "παλαμα" → matched
 All words matched → ABBREVIATION MATCH
 ```
 
 The algorithm is bidirectional: it tries both `abbreviationMatchDirectional(A, B)` and `abbreviationMatchDirectional(B, A)`.
 
-**Tier 4: Last-word Levenshtein distance (threshold ≤ 2)**
+**Tier 5: Last-word Levenshtein distance (threshold ≤ 2)**
 ```
-"Panagi Tsaldari" → last word: "tsaldari"
-"P Tsaldari"      → last word: "tsaldari"
+"Παναγή Τσαλδάρη" → last word after normalize: "τσαλδαρη"
+"Π Τσαλδάρη"      → last word after normalize: "τσαλδαρη"
 Levenshtein distance = 0 → MATCH
 ```
 
 This tier exploits the observation that in Greek street names, the surname (last word) is the most distinctive identifier.
 
-**Tier 5: Proportional edit distance (threshold ≤ 30%)**
+**Tier 6: Proportional edit distance (threshold ≤ 30%)**
 ```
 maxAllowed = max(2, floor(min(|normA|, |normB|) × 0.3))
 if levenshteinDistance(normA, normB) ≤ maxAllowed → MATCH
@@ -416,7 +393,7 @@ if levenshteinDistance(normA, normB) ≤ maxAllowed → MATCH
 
 This allows roughly one character error per three characters of the shorter string, with a minimum allowance of 2 edits.
 
-### 5.5 Levenshtein Distance Implementation
+### 5.4 Levenshtein Distance Implementation
 
 The Levenshtein distance (minimum edit distance) is computed using the standard dynamic programming algorithm with O(mn) time and space complexity, where m and n are the string lengths:
 
@@ -608,23 +585,16 @@ The batch evaluation system provides a systematic way to measure the detection a
 
 ### 9.2 Test Dataset
 
-The test dataset (`src/main/resources/test-data.csv`) contains 100 real-world test cases from four Greek cities:
-
-| City | Approximate Count | Characteristics |
-|------|------------------|-----------------|
-| Athens | ~65 | Dense urban grid with many one-way streets |
-| Thessaloniki | ~20 | Mix of grid and irregular layout |
-| Patra | ~10 | Coastal city with grid layout |
-| Karystos | ~1 | Small town, simpler road network |
+The active test dataset is `src/main/resources/test_data_annotation.csv`. It contains real-world test cases from Athens with **target road names in Greek script** (matching OSM data directly).
 
 Each test case consists of:
 - **Previous Coordinates**: The GPS position one step earlier (used to compute direction)
 - **Current Coordinates**: The GPS position at the moment of query
-- **Current Road**: The name of the road the user is walking on (present in CSV but skipped — the system auto-detects it)
-- **Target Road**: The expected cross-street name (ground truth)
+- **Target Road**: The expected cross-street name in Greek (ground truth)
+- **Google Maps Link**: Directions link for annotation verification
 - **City**: The city name (for reporting)
 
-The CSV uses semicolon delimiters (Greek/EU locale convention) with UTF-8 encoding.
+The CSV uses comma delimiters with double-quoted coordinate fields (since coordinates contain commas) and UTF-8 encoding. `BatchEvaluator` also accepts semicolon-delimited files (as produced by `TestDataGenerator`) via automatic delimiter detection.
 
 ### 9.3 Evaluation Flow
 
@@ -683,11 +653,13 @@ Row;Previous Coordinates;Current Coordinates;Target Road;Detected Road;Result;Ci
 
 ### 10.1 Purpose
 
-The initial test dataset (`test-data.csv`) contained approximately 100 cases, predominantly from Athens. For academic evaluation, a larger and more geographically diverse dataset was needed — targeting approximately 500 cases across six Greek cities. The `TestDataGenerator` class automates the creation of an annotation-ready dataset by mining OpenStreetMap road geometries for realistic pedestrian GPS point pairs near intersections.
+The `TestDataGenerator` class automates the creation of an annotation-ready dataset by mining OpenStreetMap road geometries for realistic pedestrian GPS point pairs. It targets approximately 500 cases across six Greek cities.
 
 ### 10.2 Design Rationale
 
-The generator produces point pairs that simulate pedestrian walking — two consecutive GPS positions approximately 10–20 meters apart along a real road. Each pair is placed near a known intersection so that the cross-street detector has a meaningful cross-street to find. The actual cross-street name (ground truth) is intentionally left blank for manual annotation by a human via Google Maps, ensuring independent verification.
+The generator produces point pairs that simulate pedestrian walking — two consecutive GPS positions approximately 15 meters apart along a real road. **Critically, pairs are placed mid-block** (well away from intersections), so that when the annotator opens the Google Maps link, it is unambiguous which road comes up next. Placing pairs on or near an intersection would make it unclear whether the annotator should name the road just passed or the road just ahead, leading to annotation inconsistencies.
+
+The actual cross-street name (ground truth) is intentionally left blank for manual annotation by a human via Google Maps, ensuring independent verification.
 
 ### 10.3 City Distribution
 
@@ -717,7 +689,7 @@ The `around` filter is used instead of a bounding box to produce a circular quer
 
 ### 10.5 Intersection Node Detection
 
-To ensure generated point pairs are near actual road intersections, the generator identifies **intersection nodes** — geometry coordinates shared by two or more OSM ways:
+The generator identifies **intersection nodes** — geometry coordinates shared by two or more OSM ways — to define the boundaries between road blocks:
 
 ```
 For each way in the query results:
@@ -730,63 +702,57 @@ Intersection nodes = keys with count ≥ 2
 
 OSM ways that share a physical intersection point have identical geometry coordinates at that node. Rounding to 7 decimal places (sub-meter precision) handles any floating-point representation differences while maintaining accuracy.
 
-This approach does not identify the cross-street name — it only ensures the generated points are in locations where the detector will have a cross-street to find. The cross-street name is determined independently by the human annotator.
+Rather than placing points *near* intersections, the generator uses these nodes to define **arcs** — road segments between consecutive intersections — and places point pairs in the middle of each arc.
 
 ### 10.6 Point Pair Generation Algorithm
 
-For each named road (OSM way), the generator walks along its geometry and emits point pairs:
+For each named road, the generator finds arcs between consecutive intersection nodes and places one mid-block pair per arc:
 
 ```
-cumulativeDistance = 0
-emitted = 0
+Find all intersection node indices I₁, I₂, I₃, ... in this road's geometry
 
-For each consecutive geometry node pair (prev, curr):
-    cumulativeDistance += haversineDistance(prev, curr)
+For each consecutive pair (Iₖ, Iₖ₊₁):
+    Build arc = list of geometry points from Iₖ to Iₖ₊₁
+    Compute cumulative distances along arc
+    arcLen = total arc length
 
-    if cumulativeDistance < 10m:
-        continue                      // Too close for a realistic GPS step
+    if arcLen < (MIN_SETBACK × 2 + TARGET_PAIR_DISTANCE):
+        skip                   // Arc too short; both points would be too close to intersections
 
-    if current point is NOT within 150m of an intersection node:
-        continue                      // No cross-street nearby
+    currDist = MIN_SETBACK + TARGET_PAIR_DISTANCE / 2
+    prevDist = currDist − TARGET_PAIR_DISTANCE
 
-    if cumulativeDistance ≤ 20m:
-        pairPrev = previous geometry node
-    else:
-        pairPrev = interpolate a point ~15m back from current
+    curr = interpolate point at currDist along arc
+    prev = interpolate point at prevDist along arc
 
-    if last emitted point is within 50m:
-        continue                      // Avoid clustering on the same road
+    emit (prev, curr)
 
-    emit (pairPrev, curr)
-    emitted++
-    cumulativeDistance = 0
-
-    if emitted ≥ 4:
-        stop                          // Max 4 pairs per road for diversity
+    if emitted ≥ MAX_PAIRS_PER_ROAD:
+        stop
 ```
 
 Key parameters:
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| Min pair distance | 10m | Minimum realistic pedestrian GPS spacing |
-| Max pair distance | 20m | Maximum single-step GPS spacing |
-| Target pair distance | 15m | Used for interpolation when segments are long |
-| Intersection proximity | 150m | Ensures a cross-street exists ahead |
+| Target pair distance | 15m | Realistic pedestrian GPS step spacing |
+| Min setback from intersection | 30m | Ensures points are clearly mid-block, not at a crossing |
+| Min arc length | 75m | 30m + 15m + 30m; arcs shorter than this cannot fit a mid-block pair |
 | Max pairs per road | 4 | Forces road diversity in the dataset |
-| Min spacing between pairs | 50m | Prevents clustering of nearby pairs |
 
-### 10.7 Interpolation
+### 10.7 Arc Interpolation
 
-When the cumulative distance exceeds 20m (the maximum pair distance), the generator interpolates a point along the current segment to produce a pair with realistic spacing:
+Points are placed at precise distances along the arc using linear interpolation between geometry nodes:
 
 ```
-fraction = 1.0 − (targetDist / segmentDist)
-lat = prev.lat + fraction × (curr.lat − prev.lat)
-lon = prev.lon + fraction × (curr.lon − prev.lon)
+Walk cumulative distances along arc until target distance is reached.
+For the segment [Pᵢ₋₁, Pᵢ] where cumDist[i] ≥ targetDist:
+    frac = (targetDist − cumDist[i−1]) / (cumDist[i] − cumDist[i−1])
+    lat  = Pᵢ₋₁.lat + frac × (Pᵢ.lat − Pᵢ₋₁.lat)
+    lon  = Pᵢ₋₁.lon + frac × (Pᵢ.lon − Pᵢ₋₁.lon)
 ```
 
-This linear interpolation is sufficient given the small distances involved (the error from treating the Earth as flat over 15–20 meters is negligible).
+This linear interpolation is sufficient given the small distances involved (the error from treating the Earth as flat over 15m is negligible).
 
 ### 10.8 Sampling
 
@@ -803,35 +769,34 @@ The `OverpassClient`'s own retry logic (exponential backoff on 429/504) provides
 
 ### 10.10 Output Format
 
-The generator produces a semicolon-delimited CSV with the following columns:
+The generator produces a **semicolon-delimited** CSV with the following columns:
 
 ```
-Previous Coordinates;Current Coordinates;Current Road;Target Road;Google Maps Link;City
+Previous Coordinates;Current Coordinates;Target Road;Google Maps Link;City
 ```
 
 - **Previous Coordinates**: The earlier GPS position (e.g., `37.983800, 23.727500`)
 - **Current Coordinates**: The current GPS position
-- **Current Road**: Left empty — auto-detected by the system at evaluation time
-- **Target Road**: Left empty — to be filled in by the human annotator
+- **Target Road**: Left empty — to be filled in by the human annotator in Greek
 - **Google Maps Link**: A Google Maps Directions URL from previous→current coordinates
 - **City**: The city name for reporting
+
+Semicolons are used as the delimiter so that coordinate values (which contain commas) do not require quoting, keeping the file clean and easy to edit in a spreadsheet.
 
 The Google Maps link uses the format:
 ```
 https://www.google.com/maps/dir/<prevLat>,<prevLon>/<currLat>,<currLon>
 ```
 
-This opens Google Maps showing a walking route from the previous to the current position, which reveals the user's walking direction. The annotator looks ahead in that direction to identify the next perpendicular cross-street.
-
-All coordinate values are formatted with `Locale.US` to ensure dot decimal separators regardless of the system's locale, which is essential for both Google Maps URL compatibility and `BatchEvaluator` CSV parsing.
+All coordinate values are formatted with `Locale.US` to ensure dot decimal separators regardless of the system's locale.
 
 ### 10.11 Annotation Workflow
 
 1. Open the generated `annotation-dataset.csv` in a spreadsheet application (Google Sheets or Excel)
 2. For each row, click the Google Maps Directions link
 3. The link shows a route from previous→current — this reveals the **walking direction**
-4. Look ahead in that direction and identify the next perpendicular cross-street on the map
-5. Type the cross-street name in the **Target Road** column
+4. The two points are mid-block: look ahead in the walking direction and identify the **next cross-street** — it should be immediately obvious since the points are not near any intersection
+5. Type the cross-street name in the **Target Road** column **in Greek** (e.g., `Βιθυνίας`)
 6. Save as CSV — the annotated file can be used directly with `BatchEvaluator`
 
 ### 10.12 Usage
@@ -999,8 +964,8 @@ The initial version of the system (not on this branch) used a five-step pipeline
 
 - `ApiServer`: REST API server using Javalin, providing HTTP access to the detection pipeline
 - `IntersectionDetector`: Full geometry-based intersection detection engine with auto-detection of current road
-- `RoadNameMatcher`: Shared fuzzy Greek road name matching utility (extracted from duplicated logic in `IntersectionDetector` and `EvaluationEngine`)
-- `GreekTransliterator`: Greek-to-Latin transliteration for road name resolution
+- `RoadNameMatcher`: Shared fuzzy Greek road name matching utility (extracted from duplicated logic in `IntersectionDetector` and `EvaluationEngine`); operates entirely in Greek script with Unicode accent normalization
+- `GreekTransliterator`: Greek-to-Latin transliteration utility (retained but no longer used in the main pipeline; road names are matched in Greek script directly)
 - `DebugImageSaver`: Diagnostic image generator for failed cases
 - Spatial caching in `CrossStreetDetectorApp`
 - Thread-safe `synchronized` detection for concurrent API requests
@@ -1034,7 +999,7 @@ The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which
 2. **GPS accuracy**: Consumer GPS devices typically have 3–10 meter accuracy. If the user is far from their actual position, the bearing calculation may be inaccurate, and the auto-detection of the current road may fail.
 3. **Rate limiting**: The public Overpass API has rate limits. Batch evaluation with 100 test cases requires approximately 5 minutes (3s delay between queries) plus API processing time.
 4. **Single-shot queries**: While the REST API enables integration with real-time clients, the detection pipeline itself handles single-shot queries. A real-time navigation system would need continuous GPS tracking, bearing smoothing, and incremental updates on the client side.
-5. **Greek-specific optimizations**: The transliteration and fuzzy matching logic is tailored for Greek street names. Supporting other languages with non-Latin scripts would require additional transliteration modules and normalized matching rules.
+5. **Greek-specific optimizations**: The fuzzy matching logic (Unicode accent normalization, word-set comparison, last-word Levenshtein) is tailored for Greek street names. Supporting other languages would require adapting the normalization and matching heuristics accordingly.
 
 ### 15.2 Potential Improvements
 

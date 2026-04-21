@@ -2,7 +2,6 @@ package gr.crossstreet.geo;
 
 import gr.crossstreet.api.OverpassClient;
 import gr.crossstreet.model.GeoPoint;
-import gr.crossstreet.util.GreekTransliterator;
 import gr.crossstreet.util.RoadNameMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -243,14 +242,12 @@ public class IntersectionDetector {
     // -------------------------------------------------------------------------
 
     /**
-     * Resolves a road name from OSM tags, preferring name:en over Greek name.
+     * Resolves a road name from OSM tags, preferring the Greek name tag.
      */
     public static String resolveRoadName(Map<String, String> tags) {
-        String nameEn = tags.get("name:en");
-        if (nameEn != null && !nameEn.isBlank()) return nameEn;
         String name = tags.get("name");
-        if (name == null) return null;
-        return GreekTransliterator.transliterate(name);
+        if (name != null && !name.isBlank()) return name;
+        return tags.get("name:en");
     }
 
 }
