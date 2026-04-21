@@ -60,6 +60,7 @@ public class OverpassClient {
         RequestBody body = RequestBody.create("data=" + URLEncoder.encode(query, StandardCharsets.UTF_8), FORM);
         Request request = new Request.Builder()
                 .url(overpassUrl)
+                .header("User-Agent", "CrossStreetDetector/1.0 (https://github.com/mantzorosg/Cross-street-detector)")
                 .post(body)
                 .build();
 
