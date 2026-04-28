@@ -53,7 +53,7 @@ Phase 3: Current Road Detection
 Phase 4: Geometry-Based Intersection Detection
    Input:  User position, Forward bearing, Current road name, Road data
    Output: List of cross-street intersections sorted by distance
-   Method: 2D segment-segment intersection with forward-direction filtering
+   Method: 2D segment-segment intersection with crossing-angle and forward-direction filtering
 ```
 
 ### 2.2 Component Diagram
@@ -265,9 +265,33 @@ ix = ax₁ + t · dx₁
 iy = ay₁ + t · dy₁
 ```
 
-**Implementation**: `IntersectionDetector.segmentIntersection()` (lines 209–225 of `IntersectionDetector.java`).
+**Implementation**: `IntersectionDetector.segmentIntersection()` in `IntersectionDetector.java`.
 
-### 4.5 Step 4: Forward Direction Filtering
+### 4.5 Step 4: Minimum Crossing Angle Filter
+
+A geometric intersection between two road segments does not by itself confirm that those roads are truly crossing. When a road changes its name — a common occurrence in Greek cities, where a long boulevard may be known by different names in different municipal districts — OpenStreetMap stores it as two separate `OsmWay` objects connected end-to-end at a shared node. Since the names are different, the name classifier (Step 1) places the continuation way in the *other named ways* group. The segment test (Step 3) then finds an intersection at the shared endpoint. Without further filtering, this junction would be reported as a cross-street.
+
+The minimum crossing angle filter rejects these false positives by requiring that the two roads meet at a meaningful angle. The angle θ between two road segments is derived from the magnitude of their cross product:
+
+```
+sin(θ) = |dx₁ · dy₂ − dy₁ · dx₂| / (|v₁| · |v₂|)
+```
+
+where v₁ = (dx₁, dy₁) is the direction of the current road segment and v₂ = (dx₂, dy₂) is the direction of the candidate cross-street segment.
+
+If `sin(θ) < sin(25°) ≈ 0.42`, the intersection is discarded as a near-collinear continuation:
+
+```
+crossProd = |dx₁ · dy₂ − dy₁ · dx₂|
+if crossProd / (|v₁| · |v₂|) < MIN_CROSSING_ANGLE_SIN:
+    discard intersection    (road continuation, not a genuine cross-street)
+```
+
+**Rationale**: A genuine cross-street typically meets the current road at 60°–120°. A road continuation (even with a different name) meets end-to-end at 0°–20°. The 25° threshold sits well between these two cases and is robust to moderate road curvature at junctions.
+
+**Implementation**: The `MIN_CROSSING_ANGLE_SIN` constant in `IntersectionDetector.java`, applied inside `findForwardIntersections()` immediately after each segment intersection is found.
+
+### 4.6 Step 5: Forward Direction Filtering
 
 Not all geometric intersections are relevant — the user only cares about cross-streets that lie ahead of them, not behind. The system computes the bearing from the user's position to each intersection point and compares it to the user's forward bearing:
 
@@ -282,7 +306,7 @@ if angleDiff ≥ 90°:
 
 This 90-degree threshold defines a forward semicircle: any intersection within ±90° of the user's heading is considered "forward". This is deliberately generous to account for GPS noise, road curvature, and the fact that cross-streets may not be perfectly perpendicular.
 
-### 4.6 Step 5: Deduplication and Sorting
+### 4.7 Step 6: Deduplication and Sorting
 
 A single cross-street may intersect the current road at multiple points (e.g., if the cross-street consists of multiple OSM ways, or if the current road has a complex geometry). The system keeps only the closest intersection per road name, using a `LinkedHashMap` keyed by the resolved road name.
 
@@ -292,7 +316,7 @@ The final result is a list of `Intersection` records sorted by distance (closest
 - `bearing`: The bearing from the user to the intersection
 - `roadName`: The resolved name of the cross-street
 
-### 4.7 Computational Complexity
+### 4.8 Computational Complexity
 
 The segment intersection test has complexity O(C × N), where:
 - C = total number of segments in current road ways
@@ -363,18 +387,18 @@ if normalize(A) contains normalize(B), or vice versa → MATCH
 ```
 
 **Tier 4: Abbreviation matching**
-Checks whether the shorter name's words are prefixes of the longer name's words in sequential order:
+Checks whether each word in the shorter name matches a distinct word in the longer name, either as a prefix (abbreviation) or within edit distance 1 (single-character spelling variant). Matching is **order-independent**: words may appear in any order in either name.
 
 ```
-shorter = ["κ", "παλαμα"]
-longer  = ["κωνσταντινου", "παλαμα"]
+shorter = ["νικ", "γκυζη"]
+longer  = ["γυζη", "νικολαου"]
 
-"κ" is a prefix of "κωνσταντινου" → matched
-"παλαμα" is a prefix of "παλαμα" → matched
+"νικ"    is a prefix of "νικολαου"       → matched
+"γκυζη"  vs "γυζη": edit distance = 1   → matched (spelling variant)
 All words matched → ABBREVIATION MATCH
 ```
 
-The algorithm is bidirectional: it tries both `abbreviationMatchDirectional(A, B)` and `abbreviationMatchDirectional(B, A)`.
+The edit distance allowance of 1 handles single-character spelling variants of the same street name that appear across different OSM ways or annotation sources (e.g., "Γκύζη" / "Γύζη"). The algorithm is bidirectional: it tries both `abbreviationMatchDirectional(A, B)` and `abbreviationMatchDirectional(B, A)`.
 
 **Tier 5: Last-word Levenshtein distance (threshold ≤ 2)**
 ```
