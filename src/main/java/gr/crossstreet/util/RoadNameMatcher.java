@@ -64,16 +64,17 @@ public final class RoadNameMatcher {
 
     private static boolean abbreviationMatchDirectional(String[] shorter, String[] longer) {
         if (shorter.length >= longer.length) return false;
-        int li = 0;
+        // Order-independent: each shorter word must match a distinct longer word
+        // either as a prefix (abbreviation) or within edit distance 1 (spelling variant)
+        boolean[] used = new boolean[longer.length];
         for (String sw : shorter) {
             boolean matched = false;
-            while (li < longer.length) {
-                if (longer[li].startsWith(sw)) {
+            for (int i = 0; i < longer.length; i++) {
+                if (!used[i] && (longer[i].startsWith(sw) || levenshteinDistance(sw, longer[i]) <= 1)) {
+                    used[i] = true;
                     matched = true;
-                    li++;
                     break;
                 }
-                li++;
             }
             if (!matched) return false;
         }

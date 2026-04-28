@@ -22,6 +22,13 @@ public class IntersectionDetector {
     private static final double METERS_PER_DEGREE_LAT = 111320.0;
 
     /**
+     * Minimum sine of the angle between two roads at their intersection.
+     * sin(25°) ≈ 0.42 — roads crossing at less than 25° are treated as
+     * continuations (name change) rather than genuine cross-streets.
+     */
+    private static final double MIN_CROSSING_ANGLE_SIN = Math.sin(Math.toRadians(25.0));
+
+    /**
      * A detected intersection between the current road and a cross-street.
      */
     public record Intersection(
@@ -92,6 +99,15 @@ public class IntersectionDetector {
                             cs[0], cs[1], cs[2], cs[3],
                             os[0], os[1], os[2], os[3]);
                     if (intersection == null) continue;
+
+                    // Reject near-collinear crossings: these are road continuations
+                    // where the road simply changes name, not a genuine cross-street.
+                    double csDx = cs[2] - cs[0], csDy = cs[3] - cs[1];
+                    double osDx = os[2] - os[0], osDy = os[3] - os[1];
+                    double crossProd = Math.abs(csDx * osDy - csDy * osDx);
+                    double csLen = Math.sqrt(csDx * csDx + csDy * csDy);
+                    double osLen = Math.sqrt(osDx * osDx + osDy * osDy);
+                    if (csLen > 0 && osLen > 0 && crossProd / (csLen * osLen) < MIN_CROSSING_ANGLE_SIN) continue;
 
                     double ix = intersection[0];
                     double iy = intersection[1];
