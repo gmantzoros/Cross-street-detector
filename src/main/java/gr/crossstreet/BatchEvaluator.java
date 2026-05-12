@@ -24,8 +24,8 @@ public class BatchEvaluator {
     private static final Logger log = LoggerFactory.getLogger(BatchEvaluator.class);
 
     public static void main(String[] args) {
-        String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test_data_annotation.csv";
-        String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results.csv";
+        String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test_data_annotation_all.csv";
+    String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results_all.csv";
 
         BatchEvaluator evaluator = new BatchEvaluator();
         List<TestCase> testCases = evaluator.loadCsv(Path.of(inputPath));

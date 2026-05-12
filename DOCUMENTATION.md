@@ -1032,3 +1032,42 @@ The project is built as a fat JAR (uber-JAR) using the Maven Shade Plugin, which
 3. **Real-time mode**: Implementing a streaming GPS interface with continuous intersection detection.
 4. **Self-hosted Overpass**: Running a local Overpass instance to eliminate rate limiting and reduce latency.
 5. **Multi-language support**: Generalizing the transliteration and fuzzy matching systems to support other scripts and languages.
+
+---
+
+## 16. Evaluation Results
+
+### 16.1 Dataset and Methodology
+
+The system was evaluated against a manually annotated dataset of 500 test cases distributed across six Greek cities (see Section 10 for the dataset generation process). Each test case consists of two consecutive GPS positions simulating pedestrian walking, with the expected cross-street name annotated in Greek by a human via Google Maps. The evaluation uses the fuzzy matching logic described in Section 5.3 to compare detected road names against ground-truth annotations.
+
+### 16.2 Per-City Results
+
+| City | Pass | Fail | Error | Total | Success Rate |
+|------|------|------|-------|-------|--------------|
+| Athens | 141 | 9 | 0 | 150 | 94.0% |
+| Thessaloniki | 91 | 9 | 0 | 100 | 91.0% |
+| Patras | 70 | 10 | 0 | 80 | 87.5% |
+| Heraklion | 48 | 12 | 0 | 60 | 80.0% |
+| Larissa | 53 | 7 | 0 | 60 | 88.3% |
+| Volos | 48 | 2 | 0 | 50 | 96.0% |
+| **Overall** | **451** | **49** | **0** | **500** | **90.2%** |
+
+### 16.3 Analysis
+
+The system achieves an overall success rate of 90.2% across all 500 test cases, with zero runtime errors — indicating robust Overpass API communication and stable geometric computation.
+
+**Top-performing cities**: Volos (96.0%), Athens (94.0%), and Thessaloniki (91.0%) exhibit the highest success rates. These cities share a common characteristic: well-organized urban grids with predominantly orthogonal street layouts. Regular grid patterns produce clean, near-perpendicular intersections that are ideal for the segment-segment intersection algorithm. The crossing-angle filter (Section 4.5) works most reliably when roads meet at angles close to 90°, and grid cities naturally satisfy this condition.
+
+**Lower-performing cities**: Heraklion (80.0%) and Patras (87.5%) show comparatively lower accuracy. Heraklion's historical city center features an irregular, organic street network inherited from its Venetian and Ottoman past, with narrow winding roads, acute-angle junctions, and complex multi-way intersections. These irregular geometries challenge the algorithm in several ways: oblique crossing angles may fall near the 25° minimum threshold, curved roads approaching an intersection can produce ambiguous segment orientations, and short road segments in dense historical cores reduce the precision of the intersection point calculation. Patras, while more grid-like in its modern sections, has a coastal topography that introduces diagonal roads and irregular blocks near the waterfront and in its upper hillside neighborhoods.
+
+**Mid-range performance**: Larissa (88.3%) falls between the grid cities and the irregular ones. Its central area has a reasonably regular layout, but the presence of ring roads and diagonal arterials connecting to surrounding areas introduces some non-orthogonal intersections.
+
+### 16.4 Failure Modes
+
+Analysis of the 49 failed cases reveals several recurring patterns:
+
+1. **OSM data gaps**: Missing or unnamed roads in OpenStreetMap. When a cross-street exists physically but lacks a `name` tag in OSM, the system cannot detect it as a named intersection.
+2. **Road name ambiguity**: Cases where multiple nearby roads share similar names (common with Greek honorific prefixes like "Αγίου"), causing the fuzzy matcher to select the wrong candidate.
+3. **Complex intersection geometry**: Multi-way intersections, roundabouts, or offset crossings where the geometric intersection point does not correspond cleanly to a single cross-street.
+4. **Near-parallel road continuations**: Roads that change name at a junction but meet at an angle just above the 25° crossing-angle threshold, causing false positives that displace the true cross-street from the closest position.
