@@ -65,20 +65,52 @@ public class GoogleMapsClient {
 
         Request request = new Request.Builder().url(url).get().build();
 
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new IOException("Static Maps API returned HTTP %d: %s"
-                        .formatted(response.code(), response.message()));
+        int maxAttempts = config.getRetryMaxAttempts();
+        long delayMs = config.getRetryInitialDelayMs();
+        IOException lastException = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    try (InputStream body = response.body().byteStream()) {
+                        BufferedImage image = ImageIO.read(body);
+                        if (image == null) {
+                            throw new IOException("Failed to decode image from Static Maps API response");
+                        }
+                        log.info("Fetched map image: {}x{} pixels for center {}", image.getWidth(), image.getHeight(), center);
+                        return image;
+                    }
+                }
+
+                int code = response.code();
+                lastException = new IOException("Static Maps API returned HTTP %d: %s"
+                        .formatted(code, response.message()));
+
+                if (!isRetryable(code) || attempt == maxAttempts) {
+                    throw lastException;
+                }
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt == maxAttempts) {
+                    throw e;
+                }
             }
 
-            try (InputStream body = response.body().byteStream()) {
-                BufferedImage image = ImageIO.read(body);
-                if (image == null) {
-                    throw new IOException("Failed to decode image from Static Maps API response");
-                }
-                log.info("Fetched map image: {}x{} pixels for center {}", image.getWidth(), image.getHeight(), center);
-                return image;
+            log.warn("Static Maps API attempt {}/{} failed, retrying in {}ms: {}",
+                    attempt, maxAttempts, delayMs, lastException.getMessage());
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw lastException;
             }
+            delayMs *= 2; // exponential backoff
         }
+
+        throw lastException; // unreachable, but satisfies compiler
+    }
+
+    private static boolean isRetryable(int httpCode) {
+        return httpCode == 429 || httpCode >= 500;
     }
 }

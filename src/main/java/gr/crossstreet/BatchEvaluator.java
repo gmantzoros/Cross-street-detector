@@ -101,6 +101,7 @@ public class BatchEvaluator {
         DebugImageSaver debugSaver = new DebugImageSaver(new GoogleMapsClient(config), config);
         EvaluationEngine engine = new EvaluationEngine(debugSaver);
         List<EvaluationEngine.EvalResult> results = new ArrayList<>();
+        long batchDelayMs = config.getBatchDelayMs();
 
         for (TestCase tc : testCases) {
             log.info("========== Test #{} | Target: {} | Current: {} ==========",
@@ -108,11 +109,12 @@ public class BatchEvaluator {
 
             results.add(engine.evaluate(app, tc));
 
-            // Small delay to avoid hitting Google API rate limits
+            // Delay between test cases to respect Google API rate limits
             try {
-                Thread.sleep(500);
+                Thread.sleep(batchDelayMs);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                break;
             }
         }
 

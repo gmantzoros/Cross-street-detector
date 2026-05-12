@@ -32,9 +32,14 @@ public class RoadFinderClient {
     private final ObjectMapper objectMapper;
     private final String apiKey;
 
+    private final int maxRetryAttempts;
+    private final long retryInitialDelayMs;
+
     public RoadFinderClient(AppConfig config) {
         this.apiKey = config.getApiKey();
         this.objectMapper = new ObjectMapper();
+        this.maxRetryAttempts = config.getRetryMaxAttempts();
+        this.retryInitialDelayMs = config.getRetryInitialDelayMs();
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(config.getConnectTimeoutSeconds()))
                 .readTimeout(Duration.ofSeconds(config.getReadTimeoutSeconds()))
@@ -131,14 +136,45 @@ public class RoadFinderClient {
 
     private String executeGet(HttpUrl url) throws IOException {
         Request request = new Request.Builder().url(url).get().build();
+        IOException lastException = null;
+        long delayMs = retryInitialDelayMs;
 
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new IOException("API call to %s returned HTTP %d: %s"
-                        .formatted(url.encodedPath(), response.code(), response.message()));
+        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    assert response.body() != null;
+                    return response.body().string();
+                }
+
+                int code = response.code();
+                lastException = new IOException("API call to %s returned HTTP %d: %s"
+                        .formatted(url.encodedPath(), code, response.message()));
+
+                if (!isRetryable(code) || attempt == maxRetryAttempts) {
+                    throw lastException;
+                }
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt == maxRetryAttempts) {
+                    throw e;
+                }
             }
-            assert response.body() != null;
-            return response.body().string();
+
+            log.warn("API call attempt {}/{} to {} failed, retrying in {}ms: {}",
+                    attempt, maxRetryAttempts, url.encodedPath(), delayMs, lastException.getMessage());
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw lastException;
+            }
+            delayMs *= 2;
         }
+
+        throw lastException;
+    }
+
+    private static boolean isRetryable(int httpCode) {
+        return httpCode == 429 || httpCode >= 500;
     }
 }

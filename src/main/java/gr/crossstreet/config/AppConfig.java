@@ -101,11 +101,23 @@ public final class AppConfig {
     }
 
     public int getConnectTimeoutSeconds() {
-        return getInt("http.connect.timeout.seconds", 5);
+        return getInt("http.connect.timeout.seconds", 10);
     }
 
     public int getReadTimeoutSeconds() {
-        return getInt("http.read.timeout.seconds", 5);
+        return getInt("http.read.timeout.seconds", 10);
+    }
+
+    public int getRetryMaxAttempts() {
+        return getInt("api.retry.max.attempts", 3);
+    }
+
+    public long getRetryInitialDelayMs() {
+        return Long.parseLong(properties.getProperty("api.retry.initial.delay.ms", "1000"));
+    }
+
+    public long getBatchDelayMs() {
+        return Long.parseLong(properties.getProperty("batch.delay.ms", "1000"));
     }
 
     private int getInt(String key, int defaultValue) {
