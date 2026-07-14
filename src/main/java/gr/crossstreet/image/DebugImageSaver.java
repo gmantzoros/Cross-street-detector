@@ -21,10 +21,10 @@ import java.nio.file.Path;
  * <p>Re-fetches the styled map for the given position and overlays:
  * <ul>
  *   <li>Red cross — current position (image center)</li>
- *   <li>White arrow — heading direction (toward previous GPS point)</li>
+ *   <li>White arrow — direction of travel (heading from previous to current GPS point)</li>
  *   <li>Yellow circle — primary detected road hit point + road name</li>
  *   <li>Cyan circle — alternative detected road hit point + road name</li>
- *   <li>Caption bar — row number, target road, detected roads</li>
+ *   <li>Caption bar — case number, match status, expected vs. detected roads, marker legend</li>
  * </ul>
  * Images are written to {@value #DEBUG_DIR} as {@code case-NNN.png}.</p>
  */
@@ -53,9 +53,9 @@ public class DebugImageSaver {
             int cx = original.getWidth() / 2;
             int cy = original.getHeight() / 2;
 
-            // White arrow pointing toward previous position (shows where we came from)
-            double backBearing = GeoUtils.calculateBearing(tc.currentCoords(), tc.previousCoords());
-            drawArrow(g, cx, cy, backBearing, 70, Color.WHITE);
+            // White arrow pointing in the user's direction of travel (heading)
+            double heading = GeoUtils.calculateBearing(tc.previousCoords(), tc.currentCoords());
+            drawArrow(g, cx, cy, heading, 70, Color.WHITE);
 
             // Primary hit — yellow
             if (detection.distanceMeters() > 0) {
@@ -72,12 +72,21 @@ public class DebugImageSaver {
             // Red cross at center (current position) — drawn last so it's on top
             drawCross(g, cx, cy, Color.RED, 14);
 
-            // Bottom caption
-            String caption = "#%03d | Target: %s | P: %s | A: %s".formatted(
-                    tc.rowNumber(), tc.targetRoad(),
-                    detection.roadName().orElse("?"),
-                    detection.alternativeRoadName().orElse("?"));
-            drawCaption(g, original.getWidth(), original.getHeight(), caption);
+            // Bottom caption — legend + human-readable result lines
+            String primary = detection.roadName().orElse("(none)");
+            String alternative = detection.alternativeRoadName().orElse("(none)");
+            boolean matched = detection.roadName()
+                    .map(name -> name.equalsIgnoreCase(tc.targetRoad()))
+                    .orElse(false);
+
+            String[] lines = {
+                "Case #%03d — %s".formatted(tc.rowNumber(), matched ? "MATCH" : "MISMATCH"),
+                "Expected cross-street:  %s".formatted(tc.targetRoad()),
+                "Detected (yellow):      %s".formatted(primary),
+                "Alternative (cyan):     %s".formatted(alternative),
+                "White arrow = heading  •  Red cross = current position",
+            };
+            drawCaption(g, original.getWidth(), original.getHeight(), lines);
 
             g.dispose();
 
@@ -142,17 +151,30 @@ public class DebugImageSaver {
         g.drawLine(ex, ey, (int)(ex - ah * Math.cos(a + 0.45)), (int)(ey - ah * Math.sin(a + 0.45)));
     }
 
-    private void drawCaption(Graphics2D g, int w, int h, String text) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+    private void drawCaption(Graphics2D g, int w, int h, String[] lines) {
+        g.setFont(new Font("Monospaced", Font.BOLD, 13));
         FontMetrics fm = g.getFontMetrics();
-        int pad = 6;
-        int bw = fm.stringWidth(text) + pad * 2;
-        int bh = fm.getHeight() + pad;
+        int pad = 8;
+        int lineH = fm.getHeight();
+
+        int textW = 0;
+        for (String line : lines) {
+            textW = Math.max(textW, fm.stringWidth(line));
+        }
+
+        int bw = textW + pad * 2;
+        int bh = lineH * lines.length + pad * 2;
         int bx = (w - bw) / 2;
         int by = h - bh - 8;
-        g.setColor(new Color(0, 0, 0, 180));
+
+        g.setColor(new Color(0, 0, 0, 190));
         g.fillRoundRect(bx, by, bw, bh, 8, 8);
+
         g.setColor(Color.WHITE);
-        g.drawString(text, bx + pad, by + fm.getAscent() + pad / 2);
+        int ty = by + pad + fm.getAscent();
+        for (String line : lines) {
+            g.drawString(line, bx + pad, ty);
+            ty += lineH;
+        }
     }
 }
