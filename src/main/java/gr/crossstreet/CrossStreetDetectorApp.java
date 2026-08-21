@@ -129,6 +129,11 @@ public class CrossStreetDetectorApp {
         );
     }
 
+    /** Logs Overpass cache hit/miss totals — useful at the end of a batch run. */
+    public void logCacheStatistics() {
+        overpassClient.cache().logStatistics();
+    }
+
     public synchronized OverpassClient.OverpassData getLastRoadData() {
         return lastRoadData;
     }

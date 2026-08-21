@@ -25,7 +25,7 @@ public class BatchEvaluator {
 
     public static void main(String[] args) {
         String inputPath = args.length >= 1 ? args[0] : "src/main/resources/test_data_annotation_all.csv";
-    String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results_all.csv";
+        String outputPath = args.length >= 2 ? args[1] : "results/evaluation-results_all_noforward.csv";
 
         BatchEvaluator evaluator = new BatchEvaluator();
         List<TestCase> testCases = evaluator.loadCsv(Path.of(inputPath));
@@ -121,16 +121,12 @@ public class BatchEvaluator {
             log.info("========== Test #{} | Target: {} ==========",
                     tc.rowNumber(), tc.targetRoad());
 
+            // Rate limiting lives in OverpassClient, which throttles outgoing requests
+            // only — cases served from the disk cache run at full speed.
             results.add(engine.evaluate(app, tc));
-
-            // Delay to respect Overpass API rate limits (public server throttles at ~1 req/3s)
-            try {
-                Thread.sleep(3000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
         }
 
+        app.logCacheStatistics();
         return results;
     }
 

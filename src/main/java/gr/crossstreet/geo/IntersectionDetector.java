@@ -22,11 +22,26 @@ public class IntersectionDetector {
     private static final double METERS_PER_DEGREE_LAT = 111320.0;
 
     /**
-     * Minimum sine of the angle between two roads at their intersection.
-     * sin(25°) ≈ 0.42 — roads crossing at less than 25° are treated as
-     * continuations (name change) rather than genuine cross-streets.
+     * Minimum angle between two roads at their intersection, in degrees.
+     * Roads crossing at less than this are treated as continuations
+     * (name change) rather than genuine cross-streets.
+     *
+     * <p>Sensitivity sweep: 25°.</p>
      */
-    private static final double MIN_CROSSING_ANGLE_SIN = Math.sin(Math.toRadians(25.0));
+    private static final double MIN_CROSSING_ANGLE_DEG = 25;
+
+    private static final double MIN_CROSSING_ANGLE_SIN = Math.sin(Math.toRadians(MIN_CROSSING_ANGLE_DEG));
+
+    /**
+     * Whether to discard intersections lying behind the user.
+     *
+     * <p>Set to {@code false} to run the forward-direction ablation: every intersection
+     * on the current road is considered regardless of bearing, so the result becomes the
+     * nearest cross-street in <em>any</em> direction rather than the nearest one ahead.
+     * This isolates how much of the detection accuracy comes from the direction filter
+     * as opposed to the intersection geometry alone.</p>
+     */
+    private static final boolean FORWARD_FILTER_ENABLED = true;
 
     /**
      * A detected intersection between the current road and a cross-street.
@@ -123,10 +138,13 @@ public class IntersectionDetector {
                     // Bearing from user to intersection
                     double bearing = GeoUtils.calculateBearing(userPosition, iPoint);
 
-                    // Check if forward: angle difference < 90 degrees
-                    double angleDiff = Math.abs(bearing - forwardBearing);
-                    if (angleDiff > 180) angleDiff = 360 - angleDiff;
-                    if (angleDiff >= 90) continue;
+                    // Check if forward: angle difference < 90 degrees.
+                    // Skipped entirely when running the forward-direction ablation.
+                    if (FORWARD_FILTER_ENABLED) {
+                        double angleDiff = Math.abs(bearing - forwardBearing);
+                        if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                        if (angleDiff >= 90) continue;
+                    }
 
                     // Keep closest intersection per road name
                     Intersection existing = closestByRoad.get(otherName);
@@ -141,7 +159,8 @@ public class IntersectionDetector {
                 .sorted(Comparator.comparingDouble(Intersection::distanceMeters))
                 .collect(Collectors.toList());
 
-        log.info("Found {} forward intersections from '{}'", result.size(), currentRoadName);
+        log.info("Found {} {} intersections from '{}'", result.size(),
+                FORWARD_FILTER_ENABLED ? "forward" : "unfiltered (ablation)", currentRoadName);
         for (Intersection i : result) {
             log.debug("  {} at {}m, bearing {}°", i.roadName(), String.format("%.1f", i.distanceMeters()), String.format("%.1f", i.bearing()));
         }

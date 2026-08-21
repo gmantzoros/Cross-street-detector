@@ -42,3 +42,6 @@ evaluation-results.csv
 CLAUDE.md
 debug/
 .idea
+
+### Cached Overpass responses — delete the directory to refetch from OSM
+cache/
