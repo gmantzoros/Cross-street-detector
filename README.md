@@ -93,6 +93,10 @@ java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.CrossStree
 
 ### Batch Evaluation
 
+Two annotated datasets ship with the project, each with its own runner. They differ in scale, in CSV format, and — importantly — in the script their ground-truth road names are written in.
+
+#### Primary dataset (500 cases, Greek annotations)
+
 Run the batch evaluator against the included test dataset (500 annotated real-world cases from Athens, Thessaloniki, Patras, Larissa, Volos, and Heraklion):
 
 ```bash
@@ -109,6 +113,25 @@ java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.BatchEvalu
 Per-city datasets are also included (`test_data_annotation_athens.csv`, `..._volos.csv`, and so on). Results default to `results/evaluation-results_all_sens10.csv`; debug images for failed cases are saved to `debug/`.
 
 A first run over the full dataset issues roughly 450 Overpass requests and takes around 30 minutes, dominated by the rate-limit delay. Once the cache is warm, re-runs issue no network requests and complete in seconds — see [Overpass Access and Caching](#overpass-access-and-caching).
+
+#### Google Maps benchmark (100 cases, Latin annotations)
+
+The earlier 100-case benchmark, whose ground truth was transcribed from Google Maps, is run by a separate entry point:
+
+```bash
+java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.GoogleMapsBatchEvaluator
+```
+
+Custom input/output paths:
+
+```bash
+java -cp target/Cross-street-detector-1.0-SNAPSHOT.jar gr.crossstreet.GoogleMapsBatchEvaluator \
+  src/main/resources/test-data_googlemaps.csv results/evaluation-results_googlemaps.csv
+```
+
+`GoogleMapsBatchEvaluator` subclasses `BatchEvaluator` and overrides only CSV loading; the pipeline, console report, and output format are inherited, so the two runners cannot drift apart. The override exists because this dataset is semicolon-delimited, carries an extra `Current Road` column ahead of the target, and annotates names in Latin transliteration rather than Greek — see [Road Name Matching](#road-name-matching). The `Current Road` and `Result` columns are ignored, since the detector auto-detects the current road.
+
+Current result: **96/100 (96.0%)**, no errors. The four remaining failures are genuine detection differences, not name-matching artefacts — three select a different street than the annotation, and one finds no forward intersection.
 
 ## Overpass Access and Caching
 
@@ -139,6 +162,18 @@ Because the geometry parameters in `IntersectionDetector` (such as `MIN_CROSSING
 ### Rate limiting
 
 `overpass.rate.limit.delay.ms` is enforced by `OverpassClient` immediately before each outgoing request, not by the batch loop. Cache hits and queries served by the in-memory spatial cache are therefore never delayed, and the throttle applies only to real network calls.
+
+## Road Name Matching
+
+`RoadNameMatcher.fuzzyMatch` decides whether a detected road name and an annotated one refer to the same street. Detected names come from OpenStreetMap's `name` tag and are therefore in Greek; annotations may be in either script, so matching runs in two tiers.
+
+**Same-script matching** is the default path and handles the 500-case dataset. Both names are lowercased and NFD-normalised to strip accents (`ά` → `α`), then compared by exact equality, order-independent word-set equality, substring containment, abbreviation expansion, last-word edit distance (≤ 2), and finally whole-string edit distance with a proportional threshold of roughly 30%.
+
+**Cross-script matching** engages only when exactly one of the two names contains Greek characters, and only after the same-script attempt has already failed. Both names are passed through `GreekTransliterator` — a rule-based ELOT 743-like mapping that resolves digraphs and diphthongs before single letters, so `ου`, `μπ`, `αι`, `τσ` are not fragmented — and then folded onto a coarse phonetic skeleton before the comparison is retried.
+
+The folding stage exists because informal Latin transcriptions do not follow ELOT. Annotators commonly write `η` as `h` and `χ` as `x` where the standard prescribes `i` and `ch`, so `Τηλεμάχου` is transcribed *Thlemaxou* while ELOT yields *Tilemachou* — three edits apart, one beyond the matcher's tolerance. Folding rewrites the principal variants (`ch`/`x` → `k`, `th` → `t`, `ph` → `f`, `ou` → `u`, `w` → `o`, `y`/`j` → `i`, `mp`/`mb` → `b`, `nt` → `d`, `ai` → `e`, `ei`/`oi` → `i`), collapsing both spellings to `tlemaku`.
+
+The folding is deliberately lossy — it merges distinctions Greek orthography preserves, `χ` and `κ` both becoming `k` — trading a small false-positive risk for robustness to annotation style. Confining it to the cross-script branch keeps that trade-off out of the Greek-annotated dataset entirely: when both names share a script, neither transliteration nor folding is reached, so the two datasets' results stay independently interpretable.
 
 ## Configuration
 
@@ -183,6 +218,7 @@ docker run -d --name overpass_greece \
 src/main/java/gr/crossstreet/
 ├── CrossStreetDetectorApp.java      # Detection pipeline orchestrator and CLI entry point
 ├── BatchEvaluator.java              # Batch runner for CSV test cases
+├── GoogleMapsBatchEvaluator.java    # Batch runner for the 100-case Latin-annotated benchmark
 ├── EvaluationEngine.java            # Per-case evaluation logic
 ├── DatasetEnrichment.java           # Adds derived columns to the annotated dataset
 ├── DatasetStatistics.java           # Aggregate statistics over the dataset
@@ -203,7 +239,7 @@ src/main/java/gr/crossstreet/
 │   └── OverpassCache.java           # Gzipped on-disk cache of raw Overpass responses
 └── util/
     ├── GreekTransliterator.java     # Greek-to-Latin transliteration (ELOT 743-like)
-    └── RoadNameMatcher.java         # Fuzzy Greek road name matching (shared utility)
+    └── RoadNameMatcher.java         # Fuzzy road name matching, Greek and cross-script (shared utility)
 ```
 
 `ApiServer.java` (Javalin REST server) exists on `master` but has been removed on this branch.

@@ -16,10 +16,63 @@ public final class RoadNameMatcher {
     /**
      * Fuzzy road name match handling Greek transliteration variants, abbreviations,
      * and last-word suffix matching.
+     *
+     * <p>When exactly one side is written in Greek script (e.g. an OSM {@code name} tag
+     * compared against a Latin-script benchmark annotation), both sides are transliterated
+     * to Latin and folded to a phonetic skeleton before matching. Same-script comparisons
+     * are unaffected.</p>
      */
     public static boolean fuzzyMatch(String a, String b) {
         if (a == null || b == null) return false;
 
+        if (matchSameScript(a, b)) return true;
+
+        if (hasGreek(a) != hasGreek(b)) {
+            return matchSameScript(
+                    foldLatinVariants(GreekTransliterator.transliterate(a)),
+                    foldLatinVariants(GreekTransliterator.transliterate(b)));
+        }
+        return false;
+    }
+
+    /**
+     * Collapses informal "greeklish" spelling variants onto a coarse phonetic skeleton.
+     *
+     * <p>ELOT 743 transliteration and hand-written Latin annotations disagree on several
+     * letters — ELOT renders η as {@code i} and χ as {@code ch}, where informal spelling
+     * commonly uses {@code h} and {@code x}. Folding both sides removes that disagreement
+     * (e.g. {@code Tilemachou} and {@code Thlemaxou} both become {@code tlemaku}).</p>
+     *
+     * <p>Applied only to the cross-script comparison path, never to Greek-script matching.</p>
+     */
+    private static String foldLatinVariants(String s) {
+        String r = s.toLowerCase();
+        // Digraphs first — order matters to avoid double-substitution
+        r = r.replace("mp", "b");
+        r = r.replace("mb", "b");
+        r = r.replace("nt", "d");
+        r = r.replace("gk", "g");
+        r = r.replace("ou", "u");
+        r = r.replace("ch", "k");
+        r = r.replace("th", "t");
+        r = r.replace("ph", "f");
+        r = r.replace("ai", "e");
+        r = r.replace("ei", "i");
+        r = r.replace("oi", "i");
+        // Single characters
+        r = r.replace("j", "i");
+        r = r.replace("y", "i");
+        r = r.replace("x", "k");
+        r = r.replace("w", "o");
+        return r;
+    }
+
+    /** True if the string contains at least one character from the Greek Unicode block. */
+    private static boolean hasGreek(String s) {
+        return s.codePoints().anyMatch(cp -> Character.UnicodeBlock.of(cp) == Character.UnicodeBlock.GREEK);
+    }
+
+    private static boolean matchSameScript(String a, String b) {
         String normA = normalize(a);
         String normB = normalize(b);
 
