@@ -1,0 +1,7 @@
+City;Cases;Passes;SuccessRate;Entropy;NormalisedEntropy;OrientationOrder;MeanLocalOrientationOrder;MeanSegmentLengthM;Segments;NetworkLengthKm
+Athens;150;141;0.9400;3.5067;0.9786;0.0687;0.4847;30.6;49926;1603.1
+Thessaloniki;100;91;0.9100;3.5372;0.9871;0.0417;0.2709;18.6;38753;686.4
+Patras;80;70;0.8750;3.4724;0.9690;0.0986;0.4475;25.8;22258;411.8
+Heraklion;60;48;0.8000;3.5132;0.9804;0.0630;0.2328;14.5;32265;477.6
+Larissa;60;53;0.8833;3.5246;0.9836;0.0529;0.3660;27.8;16289;470.0
+Volos;50;48;0.9600;3.4727;0.9691;0.0983;0.5086;27.9;25698;487.9
